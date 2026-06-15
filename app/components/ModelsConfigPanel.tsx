@@ -1,0 +1,645 @@
+"use client";
+
+/**
+ * Models 配置弹层（自助管理 ~/.pi/agent/models.json）。
+ *
+ * schema 直接用 SDK ModelRegistry 原生格式：
+ *   {providers: {[name]: {baseUrl?, api?, apiKey?, headers?, models?: [...]}}}
+ *
+ * 操作：
+ * - 列出现有 providers
+ * - 添加 provider（输入 provider key 名 + baseUrl + api + apiKey）
+ * - 删除 provider
+ * - 在 provider 下添加/编辑/删除 model（id + name + contextWindow + maxTokens + reasoning + cost）
+ * - 每个 model 行有 Test 按钮 → POST /api/models-config/test
+ *
+ * 写入：本地状态改动会立即"标脏"，要点 Save 才 PUT 全量覆盖。
+ */
+import { ArrowLeft, Settings } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ProviderConfigCard } from "./models/ProviderConfigCard";
+import {
+  emptyModel,
+  emptyProvider,
+  type ApiType,
+  type ModelEntry,
+  type ModelsConfig,
+  type ProviderEntry,
+  type TestResult,
+} from "./models/types";
+
+interface Props {
+  onClose: () => void;
+  onBack?: () => void;
+  onChanged?: () => void;
+}
+
+interface ProviderTemplate {
+  key: string;
+  name: string;
+  description: string;
+  provider: ProviderEntry;
+  model: ModelEntry;
+}
+
+const providerTemplates: ProviderTemplate[] = [
+  {
+    key: "openrouter",
+    name: "OpenRouter",
+    description: "一个 Key 接入多家模型；从 openrouter.ai 获取 API Key。",
+    provider: {
+      baseUrl: "https://openrouter.ai/api/v1",
+      api: "openai-completions",
+      apiKey: "",
+      models: [],
+    },
+    model: {
+      ...emptyModel(),
+      id: "anthropic/claude-sonnet-4",
+      name: "Claude Sonnet 4",
+      contextWindow: 200000,
+      maxTokens: 8192,
+    },
+  },
+  {
+    key: "ollama",
+    name: "Ollama / 本地模型",
+    description: "本机 Ollama OpenAI 兼容接口；API Key 可填任意非空值。",
+    provider: {
+      baseUrl: "http://127.0.0.1:11434/v1",
+      api: "openai-completions",
+      apiKey: "ollama",
+      models: [],
+    },
+    model: {
+      ...emptyModel(),
+      id: "qwen2.5-coder:7b",
+      name: "Local coder",
+      contextWindow: 32768,
+      maxTokens: 4096,
+    },
+  },
+  {
+    key: "lmstudio",
+    name: "LM Studio",
+    description: "本机 LM Studio Server；模型 ID 改成本机已加载模型。",
+    provider: {
+      baseUrl: "http://127.0.0.1:1234/v1",
+      api: "openai-completions",
+      apiKey: "lm-studio",
+      models: [],
+    },
+    model: {
+      ...emptyModel(),
+      id: "local-model",
+      name: "LM Studio local model",
+      contextWindow: 32768,
+      maxTokens: 4096,
+    },
+  },
+  {
+    key: "anthropic",
+    name: "Anthropic",
+    description: "Claude 官方 API；从 console.anthropic.com 获取 API Key。",
+    provider: {
+      baseUrl: "",
+      api: "anthropic-messages",
+      apiKey: "",
+      models: [],
+    },
+    model: {
+      ...emptyModel(),
+      id: "claude-sonnet-4-20250514",
+      name: "Claude Sonnet 4",
+      contextWindow: 200000,
+      maxTokens: 8192,
+    },
+  },
+  {
+    key: "custom-openai",
+    name: "OpenAI 兼容网关",
+    description: "公司网关、代理服务、One API、LiteLLM 等通用模板。",
+    provider: {
+      baseUrl: "https://api.example.com/v1",
+      api: "openai-completions",
+      apiKey: "",
+      models: [],
+    },
+    model: {
+      ...emptyModel(),
+      id: "model-id",
+      name: "Custom model",
+      contextWindow: 128000,
+      maxTokens: 4096,
+    },
+  },
+];
+
+function uniqueProviderKey(
+  baseKey: string,
+  providers: Record<string, ProviderEntry>
+): string {
+  if (!providers[baseKey]) return baseKey;
+  for (let i = 2; i < 100; i += 1) {
+    const next = `${baseKey}-${i}`;
+    if (!providers[next]) return next;
+  }
+  return `${baseKey}-${Date.now()}`;
+}
+
+function withTemplateModel(template: ProviderTemplate): ProviderEntry {
+  return {
+    ...template.provider,
+    api: template.provider.api as ApiType,
+    models: [{ ...template.model }],
+  };
+}
+
+export default function ModelsConfigPanel({ onClose, onBack, onChanged }: Props) {
+  const [cfg, setCfg] = useState<ModelsConfig>({ providers: {} });
+  const [origJson, setOrigJson] = useState<string>("");
+  const [path, setPath] = useState<string | undefined>();
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [addingProvider, setAddingProvider] = useState(false);
+  const [newProvName, setNewProvName] = useState("");
+
+  // model 添加表单：providerKey -> 是否在添加
+  const [addingModelIn, setAddingModelIn] = useState<string | null>(null);
+  const [newModelDraft, setNewModelDraft] = useState<ModelEntry>(emptyModel());
+
+  // test 状态：`${providerKey}|${modelId}` -> result
+  const [testing, setTesting] = useState<Record<string, boolean>>({});
+  const [testResult, setTestResult] = useState<Record<string, TestResult>>({});
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const r = await fetch("/api/models-config");
+      const d = (await r.json()) as {
+        path?: string;
+        data?: ModelsConfig;
+        error?: string;
+      };
+      if (d.error) setErr(d.error);
+      else {
+        const data = d.data ?? { providers: {} };
+        if (!data.providers || typeof data.providers !== "object") {
+          data.providers = {};
+        }
+        setCfg(data);
+        setOrigJson(JSON.stringify(data));
+        setPath(d.path);
+      }
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const dirty = useMemo(
+    () => JSON.stringify(cfg) !== origJson,
+    [cfg, origJson]
+  );
+
+  const save = useCallback(async () => {
+    setSaving(true);
+    setErr(null);
+    try {
+      const r = await fetch("/api/models-config", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(cfg),
+      });
+      const d = (await r.json()) as { ok?: boolean; error?: string };
+      if (!r.ok || d.error) {
+        setErr(d.error ?? `HTTP ${r.status}`);
+      } else {
+        setOrigJson(JSON.stringify(cfg));
+        onChanged?.();
+      }
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [cfg, onChanged]);
+
+  // === provider 操作 ===
+  const addProvider = useCallback(() => {
+    const key = newProvName.trim();
+    if (!key) return;
+    if (cfg.providers[key]) {
+      setErr(`provider "${key}" 已存在`);
+      return;
+    }
+    setCfg((c) => ({
+      providers: { ...c.providers, [key]: emptyProvider() },
+    }));
+    setExpanded((x) => ({ ...x, [key]: true }));
+    setNewProvName("");
+    setAddingProvider(false);
+  }, [newProvName, cfg.providers]);
+
+  const addProviderFromTemplate = useCallback(
+    (template: ProviderTemplate) => {
+      const key = uniqueProviderKey(template.key, cfg.providers);
+      setCfg((c) => ({
+        providers: {
+          ...c.providers,
+          [key]: withTemplateModel(template),
+        },
+      }));
+      setExpanded((x) => ({ ...x, [key]: true }));
+      setAddingProvider(false);
+      setNewProvName("");
+      setErr(null);
+    },
+    [cfg.providers]
+  );
+
+  const removeProvider = useCallback((key: string) => {
+    setCfg((c) => {
+      const next = { ...c.providers };
+      delete next[key];
+      return { providers: next };
+    });
+  }, []);
+
+  const updateProvider = useCallback(
+    (key: string, patch: Partial<ProviderEntry>) => {
+      setCfg((c) => ({
+        providers: {
+          ...c.providers,
+          [key]: { ...c.providers[key], ...patch },
+        },
+      }));
+    },
+    []
+  );
+
+  // === model 操作 ===
+  const addModel = useCallback(
+    (provKey: string) => {
+      const m = newModelDraft;
+      const id = (m.id ?? "").trim();
+      if (!id) return;
+      const prov = cfg.providers[provKey];
+      const models = prov?.models ?? [];
+      if (models.some((x) => x.id === id)) {
+        setErr(`model id "${id}" 在 ${provKey} 下已存在`);
+        return;
+      }
+      const cleaned: ModelEntry = { ...m, id };
+      if (cleaned.name === "") delete cleaned.name;
+      setCfg((c) => ({
+        providers: {
+          ...c.providers,
+          [provKey]: {
+            ...c.providers[provKey],
+            models: [...(c.providers[provKey]?.models ?? []), cleaned],
+          },
+        },
+      }));
+      setAddingModelIn(null);
+      setNewModelDraft(emptyModel());
+    },
+    [cfg.providers, newModelDraft]
+  );
+
+  const removeModel = useCallback((provKey: string, modelId: string) => {
+    setCfg((c) => {
+      const prov = c.providers[provKey];
+      if (!prov) return c;
+      return {
+        providers: {
+          ...c.providers,
+          [provKey]: {
+            ...prov,
+            models: (prov.models ?? []).filter((m) => m.id !== modelId),
+          },
+        },
+      };
+    });
+  }, []);
+
+  const updateModel = useCallback(
+    (provKey: string, modelId: string, patch: Partial<ModelEntry>) => {
+      setCfg((c) => {
+        const prov = c.providers[provKey];
+        if (!prov) return c;
+        return {
+          providers: {
+            ...c.providers,
+            [provKey]: {
+              ...prov,
+              models: (prov.models ?? []).map((m) =>
+                m.id === modelId ? { ...m, ...patch } : m
+              ),
+            },
+          },
+        };
+      });
+    },
+    []
+  );
+
+  // === test ===
+  const runTest = useCallback(
+    async (provKey: string, model: ModelEntry) => {
+      const tk = `${provKey}|${model.id}`;
+      setTesting((t) => ({ ...t, [tk]: true }));
+      setTestResult((r) => ({ ...r, [tk]: { ok: false, error: "" } }));
+      try {
+        const provider = cfg.providers[provKey];
+        const r = await fetch("/api/models-config/test", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            providerId: provKey,
+            provider,
+            model,
+          }),
+        });
+        const d = (await r.json()) as TestResult;
+        setTestResult((rr) => ({ ...rr, [tk]: d }));
+      } catch (e) {
+        setTestResult((rr) => ({
+          ...rr,
+          [tk]: { ok: false, error: String(e) },
+        }));
+      } finally {
+        setTesting((t) => ({ ...t, [tk]: false }));
+      }
+    },
+    [cfg.providers]
+  );
+
+  const providerKeys = Object.keys(cfg.providers).sort();
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "var(--color-overlay)" }}
+      onClick={onClose}
+    >
+      <div
+        className="rounded-md w-full max-w-3xl max-h-[88vh] flex flex-col"
+        style={{
+          background: "var(--bg-panel)",
+          border: "1px solid var(--border)",
+          color: "var(--fg)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header
+          className="px-4 py-2 flex items-center justify-between border-b"
+          style={{ borderColor: "var(--border-soft)" }}
+        >
+          <span className="text-sm font-semibold inline-flex items-center gap-1.5">
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="mr-1 inline-flex h-6 w-6 items-center justify-center rounded border hover:opacity-80"
+                style={{ borderColor: "var(--border)" }}
+                aria-label="返回上一级"
+                title="返回上一级"
+              >
+                <ArrowLeft size={13} />
+              </button>
+            )}
+            <Settings size={14} />
+            自定义模型配置
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={loading || saving}
+              className="px-2 py-0.5 text-xs rounded border hover:opacity-80 disabled:opacity-50"
+              style={{ borderColor: "var(--border)" }}
+              title="重新加载"
+            >
+              {loading ? "…" : "↻"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={!dirty || saving || loading}
+              className="rounded px-2 py-0.5 text-xs disabled:opacity-50"
+              style={{ background: "var(--accent)", color: "var(--color-bg)" }}
+              title="写入 models.json"
+            >
+              {saving ? "保存中…" : dirty ? "保存 *" : "保存"}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-2 py-0.5 text-xs rounded border hover:opacity-80"
+              style={{ borderColor: "var(--border)" }}
+            >
+              ✕
+            </button>
+          </div>
+        </header>
+
+        {err && (
+          <div
+            className="m-3 p-2 rounded text-xs"
+            style={{
+              background: "var(--color-danger-bg)",
+              border: "1px solid var(--color-danger)",
+              color: "var(--color-danger)",
+            }}
+          >
+            {err}
+          </div>
+        )}
+
+        <div className="flex-1 overflow-y-auto px-3 py-2 space-y-3">
+          <section
+            className="rounded-md border p-3"
+            style={{
+              borderColor: "var(--border-soft)",
+              background: "var(--bg-panel-2)",
+            }}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="text-xs font-medium">推荐：从预设开始</div>
+                <p
+                  className="mt-1 text-token-xs leading-5"
+                  style={{ color: "var(--fg-faint)" }}
+                >
+                  模型 API 资源会写入 models.json，供 Shaula 在当前产品内直接调用。
+                  公司 Claude 3P 与自研 Coding 助手已放在开始向导里单独配置。
+                </p>
+              </div>
+            </div>
+            <div
+              className="mt-3 text-token-xs font-medium"
+              style={{ color: "var(--fg-muted)" }}
+            >
+              通用与本地端点
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              {providerTemplates.map((template) => (
+                <button
+                  key={template.key}
+                  type="button"
+                  onClick={() => addProviderFromTemplate(template)}
+                  className="rounded border px-3 py-2 text-left transition-colors hover:bg-[color:var(--bg-hover)]"
+                  style={{ borderColor: "var(--border)" }}
+                >
+                  <span className="block text-xs font-medium">
+                    {template.name}
+                  </span>
+                  <span
+                    className="mt-1 block text-token-xs leading-5"
+                    style={{ color: "var(--fg-faint)" }}
+                  >
+                    {template.description}
+                  </span>
+                  <span
+                    className="mt-1 block truncate font-mono text-token-xs"
+                    style={{ color: "var(--fg-muted)" }}
+                  >
+                    {template.provider.baseUrl || "(官方默认地址)"} ·{" "}
+                    {template.model.id}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {providerKeys.length === 0 && !loading && (
+            <div
+              className="text-xs text-center py-8"
+              style={{ color: "var(--fg-faint)" }}
+            >
+              暂无服务商，点击下方按钮添加。
+            </div>
+          )}
+
+          {providerKeys.map((provKey) => {
+            const prov = cfg.providers[provKey];
+            return (
+              <ProviderConfigCard
+                key={provKey}
+                providerKey={provKey}
+                provider={prov}
+                isOpen={expanded[provKey] ?? false}
+                addingModel={addingModelIn === provKey}
+                newModelDraft={newModelDraft}
+                testing={testing}
+                testResult={testResult}
+                onToggle={(key) =>
+                  setExpanded((x) => ({ ...x, [key]: !(x[key] ?? false) }))
+                }
+                onRemoveProvider={removeProvider}
+                onUpdateProvider={updateProvider}
+                onRunTest={(key, model) => void runTest(key, model)}
+                onRemoveModel={removeModel}
+                onUpdateModel={updateModel}
+                onAddModel={addModel}
+                onStartAddModel={setAddingModelIn}
+                onCancelAddModel={() => {
+                  setAddingModelIn(null);
+                  setNewModelDraft(emptyModel());
+                }}
+                setNewModelDraft={setNewModelDraft}
+              />
+            );
+          })}
+
+          {/* Add provider */}
+          {addingProvider ? (
+            <div
+              className="rounded px-2 py-1.5 text-xs"
+              style={{
+                background: "var(--bg-panel-2)",
+                border: "1px dashed var(--border)",
+              }}
+            >
+              <div className="flex items-center gap-1">
+                <input
+                  autoFocus
+                  value={newProvName}
+                  onChange={(e) => setNewProvName(e.target.value)}
+                  placeholder="服务商标识，例如 anthropic、my-openrouter"
+                  className="flex-1 rounded px-2 py-1 text-xs border outline-none"
+                  style={{
+                    background: "var(--bg-panel)",
+                    borderColor: "var(--border)",
+                    color: "var(--fg)",
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addProvider();
+                    if (e.key === "Escape") {
+                      setAddingProvider(false);
+                      setNewProvName("");
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={addProvider}
+                  disabled={!newProvName.trim()}
+                  className="rounded px-2 py-1 text-xs disabled:opacity-50"
+                  style={{ background: "var(--accent)", color: "var(--color-bg)" }}
+                >
+                  添加
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddingProvider(false);
+                    setNewProvName("");
+                  }}
+                  className="px-2 py-1 text-xs rounded border hover:opacity-80"
+                  style={{ borderColor: "var(--border)" }}
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAddingProvider(true)}
+              className="w-full px-2 py-1.5 text-xs rounded border hover:opacity-80"
+              style={{
+                borderColor: "var(--border)",
+                color: "var(--fg-muted)",
+              }}
+            >
+              + 添加服务商
+            </button>
+          )}
+        </div>
+
+        {path && (
+          <div
+            className="flex justify-between border-t px-4 py-2 text-token-xs"
+            style={{
+              borderColor: "var(--border-soft)",
+              color: "var(--fg-faint)",
+            }}
+          >
+            <span>存储位置：{path}</span>
+            {dirty && <span style={{ color: "var(--color-warning)" }}>有未保存改动</span>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,765 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  主题：用 [data-theme=light|dark] 切。
+  默认 light（对齐上游 @agegr/pi-web 的视觉基线）。
+  Token 命名跟上游对齐，旧名作 alias 仍可用，迁移完一处删一处。
+  详见 docs/design-tokens.md。
+*/
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Primitive + semantic colors */
+  --color-bg: #ffffff;
+  --color-surface: #f5f5f5;
+  --color-surface-hover: #eeeeee;
+  --color-surface-selected: #e8e8e8;
+  --color-surface-subtle: rgba(0, 0, 0, 0.03);
+  --color-border: #e0e0e0;
+  --color-border-soft: #ececec;
+  --color-text: #1a1a1a;
+  --color-text-muted: #6b7280;
+  --color-text-dim: #9ca3af;
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-bg: rgba(37, 99, 235, 0.12);
+  --color-user-bg: #eff6ff;
+  --color-assistant-bg: #ffffff;
+  --color-tool-bg: #f9fafb;
+  --color-success: #16a34a;
+  --color-success-bg: rgba(22, 163, 74, 0.12);
+  --color-warning: #d97706;
+  --color-warning-bg: rgba(217, 119, 6, 0.12);
+  --color-danger: #dc2626;
+  --color-danger-bg: rgba(220, 38, 38, 0.1);
+  --color-info: #2563eb;
+  --color-info-bg: rgba(37, 99, 235, 0.1);
+  --color-overlay: rgba(0, 0, 0, 0.4);
+  --color-shadow-control: rgba(0, 0, 0, 0.22);
+  --color-status-contrast: #0b0b0c;
+
+  /* Back-compat color aliases */
+  --bg: var(--color-bg);
+  --bg-panel: var(--color-surface);
+  --bg-hover: var(--color-surface-hover);
+  --bg-selected: var(--color-surface-selected);
+  --bg-subtle: var(--color-surface-subtle);
+  --border: var(--color-border);
+  --text: var(--color-text);
+  --text-muted: var(--color-text-muted);
+  --text-dim: var(--color-text-dim);
+  --accent: var(--color-accent);
+  --accent-hover: var(--color-accent-hover);
+  --user-bg: var(--color-user-bg);
+  --assistant-bg: var(--color-assistant-bg);
+  --tool-bg: var(--color-tool-bg);
+
+  /* Typography */
+  --font-sans: -apple-system, system-ui, "Segoe UI", Roboto, "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  --font-mono-stack: var(--font-noto-mono), "JetBrains Mono", "Fira Code",
+    Consolas, ui-monospace, "PingFang SC", "Microsoft YaHei", monospace;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-ui: 14px;
+  --text-body: 15px;
+  --text-mobile: 16px;
+  --text-title: 20px;
+  --text-page-title: 28px;
+  --sidebar-font-size: var(--text-sm);
+  --assistant-answer-font-size: 14px;
+  --assistant-answer-line-height: 1.7;
+  --line-tight: 1.2;
+  --line-ui: 1.4;
+  --line-body: 1.5;
+  --line-reading: 1.7;
+
+  /* Layout scale */
+  --space-0: 0;
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Shape, controls, icons */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-sheet: 20px;
+  --radius-full: 999px;
+  --control-xs: 30px;
+  --control-sm: 40px;
+  --control-md: 42px;
+  --control-lg: 44px;
+  --control-mobile: 44px;
+  --size-icon-xs: 13px;
+  --size-icon-sm: 15px;
+  --size-icon-md: 18px;
+  --size-icon-lg: 22px;
+  --size-icon-xl: 24px;
+
+  /* Elevation, motion, layers */
+  --shadow-popover: 0 12px 30px rgba(15, 23, 42, 0.12);
+  --shadow-modal: 0 20px 56px rgba(15, 23, 42, 0.18);
+  --shadow-sidebar: 4px 0 20px rgba(0, 0, 0, 0.12);
+  --motion-fast: 120ms;
+  --motion-base: 150ms;
+  --motion-slow: 220ms;
+  --motion-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --z-popover: 50;
+  --z-modal: 60;
+  --z-toast: 70;
+
+  /* 浮层菜单 */
+  --menu-bg: var(--bg-panel);
+  --menu-border: var(--border);
+  --menu-shadow: var(--shadow-popover);
+  --menu-width: 220px;
+  --menu-radius: 10px;
+  --menu-padding: 6px;
+  --menu-item-height: 42px;
+  --menu-item-gap: 10px;
+  --menu-item-radius: 6px;
+  --menu-font-size: 14px;
+  --menu-icon-size: 18px;
+
+  /* Shared component tokens */
+  --button-radius: var(--radius-sm);
+  --button-height-sm: var(--control-sm);
+  --button-height-md: var(--control-md);
+  --field-height: var(--control-lg);
+  --field-radius: var(--radius-sm);
+  --badge-radius: var(--radius-sm);
+  --sheet-radius: var(--radius-sheet);
+  --sidebar-row-radius: var(--radius-md);
+  --browser-canvas-bg: #0b0b0c;
+  --browser-preview-bg: #ffffff;
+  --browser-pointer-line: rgba(37, 99, 235, 0.75);
+  --browser-pointer-fill: var(--color-accent);
+  --browser-pointer-surface: rgba(15, 23, 42, 0.86);
+  --browser-pointer-text: #dbeafe;
+  --browser-pointer-border: rgba(37, 99, 235, 0.4);
+  --browser-pointer-shadow: drop-shadow(0 2px 5px rgba(15, 23, 42, 0.45));
+  --qr-code-bg: #ffffff;
+  --image-lightbox-bg: rgba(0, 0, 0, 0.85);
+  --image-lightbox-control-bg: rgba(255, 255, 255, 0.12);
+  --image-lightbox-control-border: rgba(255, 255, 255, 0.18);
+  --image-lightbox-text: #ffffff;
+  --image-lightbox-text-muted: rgba(255, 255, 255, 0.55);
+  --image-lightbox-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+
+  /* Pet layer tokens: expressive status UI kept separate from workbench chrome. */
+  --pet-surface: rgba(17, 24, 39, 0.94);
+  --pet-surface-strong: rgba(17, 24, 39, 0.96);
+  --pet-surface-soft: rgba(255, 255, 255, 0.06);
+  --pet-border: rgba(255, 255, 255, 0.1);
+  --pet-border-dark: rgba(17, 24, 39, 0.75);
+  --pet-text: #f9fafb;
+  --pet-text-muted: #9ca3af;
+  --pet-text-dim: #6b7280;
+  --pet-contrast: #111827;
+  --pet-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  --pet-shadow-strong: 0 8px 32px rgba(0, 0, 0, 0.6);
+  --pet-state-idle: #6b7280;
+  --pet-state-complete: #10b981;
+  --pet-state-approval: #f59e0b;
+  --pet-state-clarification: #14b8a6;
+  --pet-state-budget-warning: #eab308;
+  --pet-state-budget-blocked: #f97316;
+  --pet-state-thinking: #6366f1;
+  --pet-state-running: #a855f7;
+  --pet-state-error: #dc2626;
+  --pet-state-offline: #9ca3af;
+
+  /* 旧名 alias —— 给未迁移组件用，后续清理 */
+  --bg-app: var(--bg);
+  --bg-panel-2: var(--bg-selected);
+  --border-soft: var(--color-border-soft);
+  --fg: var(--text);
+  --fg-muted: var(--text-muted);
+  --fg-faint: var(--text-dim);
+
+  /* 过渡 */
+  --transition-duration: var(--motion-base);
+  --transition-timing: var(--motion-ease);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-bg: #1a1a1a;
+  --color-surface: #242424;
+  --color-surface-hover: #2e2e2e;
+  --color-surface-selected: #383838;
+  --color-surface-subtle: rgba(255, 255, 255, 0.04);
+  --color-border: #3a3a3a;
+  --color-border-soft: #323232;
+  --color-text: #e8e8e8;
+  --color-text-muted: #9ca3af;
+  --color-text-dim: #6b7280;
+  --color-accent: #60a5fa;
+  --color-accent-hover: #93c5fd;
+  --color-accent-bg: rgba(96, 165, 250, 0.14);
+  --color-user-bg: #1e293b;
+  --color-assistant-bg: #1a1a1a;
+  --color-tool-bg: #1f2937;
+  --color-success: #4ade80;
+  --color-success-bg: rgba(74, 222, 128, 0.12);
+  --color-warning: #fbbf24;
+  --color-warning-bg: rgba(251, 191, 36, 0.14);
+  --color-danger: #f87171;
+  --color-danger-bg: rgba(248, 113, 113, 0.13);
+  --color-info: #60a5fa;
+  --color-info-bg: rgba(96, 165, 250, 0.14);
+  --color-overlay: rgba(0, 0, 0, 0.4);
+  --color-shadow-control: rgba(0, 0, 0, 0.22);
+  --color-status-contrast: #0b0b0c;
+
+  --bg: var(--color-bg);
+  --bg-panel: var(--color-surface);
+  --bg-hover: var(--color-surface-hover);
+  --bg-selected: var(--color-surface-selected);
+  --bg-subtle: var(--color-surface-subtle);
+  --border: var(--color-border);
+  --text: var(--color-text);
+  --text-muted: var(--color-text-muted);
+  --text-dim: var(--color-text-dim);
+  --accent: var(--color-accent);
+  --accent-hover: var(--color-accent-hover);
+  --user-bg: var(--color-user-bg);
+  --assistant-bg: var(--color-assistant-bg);
+  --tool-bg: var(--color-tool-bg);
+
+  --menu-bg: var(--bg-panel);
+  --menu-border: var(--border);
+  --menu-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
+
+  --bg-app: var(--bg);
+  --bg-panel-2: var(--bg-selected);
+  --border-soft: var(--color-border-soft);
+  --fg: var(--text);
+  --fg-muted: var(--text-muted);
+  --fg-faint: var(--text-dim);
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  /* electron/web app:viewport 永不滚动,溢出由内层各自负责 */
+  height: 100%;
+  overflow: hidden;
+  /* upstream 默认 sans，仅 brand/特定区域用 mono（用 .font-mono 启用） */
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: var(--line-body);
+  word-break: break-word;
+  font-variant-numeric: tabular-nums;
+  transition:
+    background var(--transition-duration) var(--transition-timing),
+    color var(--transition-duration) var(--transition-timing);
+}
+
+/* Theme switch uses the browser View Transition snapshot cross-fade instead of
+   transitioning every colored node individually. This avoids grey cards flashing
+   and text color “jumping” at slightly different times. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 180ms;
+  animation-timing-function: ease;
+}
+::view-transition-old(root) {
+  animation-name: theme-fade-out;
+}
+::view-transition-new(root) {
+  animation-name: theme-fade-in;
+}
+@keyframes theme-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes theme-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.theme-icon-swap {
+  animation: theme-icon-pop 180ms ease;
+}
+@keyframes theme-icon-pop {
+  0% { transform: scale(0.86) rotate(-10deg); opacity: 0.75; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root),
+  .theme-icon-swap {
+    animation: none;
+  }
+}
+
+.font-mono {
+  font-family: var(--font-mono-stack) !important;
+}
+
+.mobile-safe-screen {
+  height: 100vh;
+  height: var(--mobile-app-height, 100svh);
+  overscroll-behavior: none;
+  touch-action: manipulation;
+}
+
+.mobile-safe-top {
+  padding-top: max(0.5rem, calc(env(safe-area-inset-top) + 0.5rem));
+}
+
+.mobile-safe-bottom {
+  padding-bottom: max(0.5rem, calc(env(safe-area-inset-bottom) + 0.5rem));
+}
+
+.mobile-safe-drawer {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Thinking 块内的 markdown:prose 默认会撑大字号/给段落很厚 margin,
+ * 这里强制 12px + 紧凑行距 + 继承父颜色(已经被设成 dim) */
+.thinking-md .prose,
+.thinking-md .prose * {
+  color: inherit !important;
+  font-size: 12px !important;
+}
+.thinking-md .prose p,
+.thinking-md .prose ul,
+.thinking-md .prose ol,
+.thinking-md .prose pre {
+  margin-top: 0.4em !important;
+  margin-bottom: 0.4em !important;
+  line-height: 1.55 !important;
+}
+.thinking-md .prose h1,
+.thinking-md .prose h2,
+.thinking-md .prose h3,
+.thinking-md .prose h4 {
+  font-size: 12px !important;
+  margin-top: 0.6em !important;
+  margin-bottom: 0.3em !important;
+}
+.thinking-md .prose strong {
+  color: inherit !important;
+  font-weight: 600;
+}
+
+.mobile-message-markdown .prose {
+  font-size: 15px;
+  line-height: 1.72;
+}
+
+.mobile-message-markdown .prose :where(p, ul, ol, pre, blockquote, table) {
+  margin-top: 0.45em;
+  margin-bottom: 0.45em;
+}
+
+.mobile-message-markdown .prose :where(h1, h2, h3, h4) {
+  margin-top: 0.85em;
+  margin-bottom: 0.35em;
+  line-height: 1.28;
+  letter-spacing: 0;
+}
+
+.mobile-message-markdown .prose :where(h1) {
+  font-size: 1.45rem;
+}
+
+.mobile-message-markdown .prose :where(h2) {
+  font-size: 1.28rem;
+}
+
+.mobile-message-markdown .prose :where(h3, h4) {
+  font-size: 1.08rem;
+}
+
+.mobile-message-markdown .prose :where(pre, table) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.mobile-message-markdown .prose :where(code) {
+  word-break: break-word;
+}
+
+/* upstream layout 元类 */
+.sidebar-container {
+  display: flex;
+  flex-direction: column;
+  width: 260px;
+  height: 100%;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  flex-shrink: 0;
+  transition:
+    width 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 180ms ease,
+    opacity 180ms ease;
+  will-change: width;
+}
+
+.sidebar-container,
+.workbench-sidebar {
+  font-size: var(--sidebar-font-size);
+}
+
+.sidebar-container :where(.text-token-xs, .text-xs),
+.workbench-sidebar :where(.text-token-xs, .text-xs) {
+  font-size: max(11px, calc(var(--sidebar-font-size) - 2px)) !important;
+}
+
+.sidebar-container :where(.text-token-sm, .text-sm, .text-token-ui),
+.workbench-sidebar :where(.text-token-sm, .text-sm, .text-token-ui) {
+  font-size: var(--sidebar-font-size) !important;
+}
+
+.sidebar-container :where(.text-token-mobile),
+.workbench-sidebar :where(.text-token-mobile) {
+  font-size: calc(var(--sidebar-font-size) + 2px) !important;
+}
+
+.assistant-answer-text {
+  font-size: var(--assistant-answer-font-size);
+  line-height: var(--assistant-answer-line-height);
+}
+
+.assistant-answer-text .prose.prose-sm {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.assistant-answer-text .prose :where(p, ul, ol, blockquote, table) {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.assistant-answer-text .prose :where(h1, h2, h3, h4) {
+  letter-spacing: 0;
+}
+
+.assistant-answer-text .prose :where(pre),
+.assistant-answer-text .prose :where(pre *) {
+  line-height: 1.6;
+}
+/* P2-G: 屏外消息跳过样式/布局/绘制。contain-intrinsic-size 给一个合理的
+   默认占位高度，避免滚动条跳动；visible 后默认高度会被真实高度覆盖。
+   不适用于最后一条（貌似需要流式下准确高度才能贴底），由调用方决定不加该类。 */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 220px;
+}
+
+.sidebar-container.sidebar-closed {
+  width: 0;
+  border-right: 0;
+  opacity: 0;
+}
+
+/* Chat/workbench scroll surfaces: compact native scrollbar.
+   Do not set global scroll-behavior:smooth here: streaming auto-follow calls
+   scrollTo({behavior:"auto"}), and CSS smooth would turn every token update into
+   an overlapping smooth animation, which makes the scrollbar appear to jump. */
+.overflow-y-auto,
+.overflow-auto,
+.settings-page {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 48%, transparent) transparent;
+}
+.overflow-y-auto::-webkit-scrollbar,
+.overflow-auto::-webkit-scrollbar,
+.settings-page::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.overflow-y-auto::-webkit-scrollbar-track,
+.overflow-auto::-webkit-scrollbar-track,
+.settings-page::-webkit-scrollbar-track {
+  background: transparent;
+}
+.overflow-y-auto::-webkit-scrollbar-thumb,
+.overflow-auto::-webkit-scrollbar-thumb,
+.settings-page::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-muted) 36%, transparent);
+  border-radius: 999px;
+}
+.overflow-y-auto::-webkit-scrollbar-thumb:hover,
+.overflow-auto::-webkit-scrollbar-thumb:hover,
+.settings-page::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-muted) 58%, transparent);
+}
+
+/* 拖拽图片 overlay */
+@keyframes drop-zone-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes drop-ripple {
+  0%   { transform: scale(0); opacity: 0.6; }
+  100% { transform: scale(1); opacity: 0; }
+}
+
+/* sidebar 会话"运行中"状态点的脉冲 */
+@keyframes session-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(251,191,36,0.55); }
+  70%  { box-shadow: 0 0 0 6px rgba(251,191,36,0);   }
+  100% { box-shadow: 0 0 0 0 rgba(251,191,36,0);     }
+}
+
+/* ====== 宠物挂件 ====== */
+/* 宠物窗口 body 透明 */
+body.pet-window {
+  background: transparent !important;
+  overflow: hidden;
+}
+
+/* Settings page owns its own scroll viewport because the app shell locks body scroll. */
+.settings-page {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-dim) var(--bg-panel);
+}
+.settings-page::-webkit-scrollbar,
+.settings-page *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.settings-page::-webkit-scrollbar-track,
+.settings-page *::-webkit-scrollbar-track {
+  background: var(--bg-panel);
+}
+.settings-page::-webkit-scrollbar-thumb,
+.settings-page *::-webkit-scrollbar-thumb {
+  background: var(--text-dim);
+  border: 2px solid var(--bg-panel);
+  border-radius: 999px;
+}
+.settings-page .border-neutral-800,
+.settings-page .border-neutral-700 {
+  border-color: var(--border) !important;
+}
+.settings-page .bg-neutral-950,
+.settings-page .bg-neutral-950\/70,
+.settings-page .bg-neutral-900,
+.settings-page .bg-neutral-800 {
+  background: var(--bg-panel) !important;
+}
+.settings-page .hover\:bg-neutral-900:hover {
+  background: var(--bg-hover) !important;
+}
+.settings-page .text-neutral-200,
+.settings-page .text-neutral-300,
+.settings-page .text-neutral-400 {
+  color: var(--text) !important;
+}
+.settings-page .text-neutral-500 {
+  color: var(--text-muted) !important;
+}
+.settings-page .text-neutral-600 {
+  color: var(--text-dim) !important;
+}
+.settings-page input,
+.settings-page textarea,
+.settings-page select {
+  background: var(--bg) !important;
+  border-color: var(--border) !important;
+  color: var(--text) !important;
+}
+.settings-page input::placeholder,
+.settings-page textarea::placeholder {
+  color: var(--text-dim) !important;
+}
+.settings-page input:focus,
+.settings-page textarea:focus,
+.settings-page select:focus {
+  border-color: var(--accent) !important;
+}
+.settings-page .bg-blue-700,
+.settings-page .bg-blue-600 {
+  background: var(--accent) !important;
+  color: #fff !important;
+}
+.settings-page .hover\:bg-blue-600:hover {
+  background: var(--accent-hover) !important;
+}
+.settings-page button:disabled,
+.settings-page .disabled\:bg-neutral-800:disabled,
+.settings-page .disabled\:text-neutral-600:disabled,
+.settings-page .disabled\:text-neutral-500:disabled {
+  background: color-mix(in srgb, var(--bg-panel) 70%, var(--bg)) !important;
+  border-color: var(--border) !important;
+  color: var(--text-dim) !important;
+}
+.settings-page .border-emerald-700,
+.settings-page .border-emerald-800 {
+  border-color: color-mix(in srgb, #16a34a 45%, var(--border)) !important;
+}
+.settings-page .bg-emerald-900\/40,
+.settings-page .bg-emerald-950\/20,
+.settings-page .bg-emerald-950\/30 {
+  background: color-mix(in srgb, #16a34a 12%, transparent) !important;
+}
+.settings-page .text-emerald-200,
+.settings-page .text-emerald-300 {
+  color: color-mix(in srgb, #16a34a 78%, var(--text)) !important;
+}
+.settings-page .border-amber-700,
+.settings-page .border-amber-800 {
+  border-color: color-mix(in srgb, #d97706 45%, var(--border)) !important;
+}
+.settings-page .bg-amber-950\/20,
+.settings-page .bg-amber-950\/30 {
+  background: color-mix(in srgb, #d97706 10%, transparent) !important;
+}
+.settings-page .text-amber-200,
+.settings-page .text-amber-300 {
+  color: color-mix(in srgb, #d97706 78%, var(--text)) !important;
+}
+.settings-page .border-red-800 {
+  border-color: color-mix(in srgb, #dc2626 48%, var(--border)) !important;
+}
+.settings-page .bg-red-900\/30,
+.settings-page .bg-red-900\/40 {
+  background: color-mix(in srgb, #dc2626 10%, transparent) !important;
+}
+.settings-page .hover\:bg-red-900\/30:hover,
+.settings-page .hover\:bg-red-900\/40:hover {
+  background: color-mix(in srgb, #dc2626 14%, transparent) !important;
+}
+.settings-page .text-red-200,
+.settings-page .text-red-300 {
+  color: color-mix(in srgb, #dc2626 82%, var(--text)) !important;
+}
+
+/* 通用脉动（attention 红点 / bubble 状态点用） */
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.85); }
+}
+
+/* idle 呼吸：sprite 整体微微透明度+缩放变化，4s 一个周期，温和 */
+@keyframes pet-breathe {
+  0%, 100% { opacity: 1;    transform: scale(1); }
+  50%      { opacity: 0.88; transform: scale(0.97); }
+}
+
+/* thinking 光晕脉动：indigo，1.2s 周期 */
+@keyframes pet-glow-thinking {
+  0%, 100% {
+    box-shadow:
+      0 0 0   rgba(99,102,241,0),
+      0 0 16px rgba(99,102,241,0.35);
+  }
+  50% {
+    box-shadow:
+      0 0 0   rgba(99,102,241,0),
+      0 0 28px rgba(99,102,241,0.65);
+  }
+}
+
+/* running 光晕扫动：purple 进度环，2s 周期 */
+@keyframes pet-glow-running {
+  0% {
+    box-shadow:
+      0 0 16px rgba(168,85,247,0.45),
+      inset 0 -2px 0 rgba(168,85,247,0.6);
+  }
+  50% {
+    box-shadow:
+      0 0 24px rgba(168,85,247,0.65),
+      inset 0 -2px 0 rgba(168,85,247,1);
+  }
+  100% {
+    box-shadow:
+      0 0 16px rgba(168,85,247,0.45),
+      inset 0 -2px 0 rgba(168,85,247,0.6);
+  }
+}
+
+/* approval 待授权：琥珀色慢脉动，表示需要用户决策 */
+@keyframes pet-glow-warning {
+  0%, 100% { box-shadow: 0 0 14px rgba(245,158,11,0.45); }
+  50%      { box-shadow: 0 0 28px rgba(245,158,11,0.78); }
+}
+
+/* clarification 待确认：青绿色慢脉动，表示需要用户选择下一步 */
+@keyframes pet-glow-clarification {
+  0%, 100% { box-shadow: 0 0 14px rgba(20,184,166,0.42); }
+  50%      { box-shadow: 0 0 28px rgba(20,184,166,0.74); }
+}
+
+/* budget 预警：黄色脉动，低于错误态强度 */
+@keyframes pet-glow-budget {
+  0%, 100% { box-shadow: 0 0 12px rgba(234,179,8,0.38); }
+  50%      { box-shadow: 0 0 24px rgba(234,179,8,0.68); }
+}
+
+/* done 弹性放大：单次播放，结束后回归静态 */
+@keyframes pet-pop {
+  0%   { transform: scale(1);    box-shadow: 0 0 0    rgba(16,185,129,0);   }
+  30%  { transform: scale(1.12); box-shadow: 0 0 28px rgba(16,185,129,0.7); }
+  100% { transform: scale(1);    box-shadow: 0 0 0    rgba(16,185,129,0);   }
+}
+
+/* error 警示：红色慢呼吸 */
+@keyframes pet-glow-error {
+  0%, 100% { box-shadow: 0 0 16px rgba(220,38,38,0.5); }
+  50%      { box-shadow: 0 0 28px rgba(220,38,38,0.85); }
+}
+
+/* attention 蓝点徽章 —— 脉动提示但不刺激 */
+@keyframes pet-badge-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(99,102,241,0.7);
+  }
+  70% {
+    transform: scale(1.15);
+    box-shadow: 0 0 0 6px rgba(99,102,241,0);
+  }
+}
+
+/* toast 入场动画：从右侧滑入 + 淡入 */
+@keyframes pet-toast-in {
+  from {
+    transform: translateX(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* 宠物窗口内滚动条：细 + 半透明，避免破坏视觉 */
+.pet-card-scroll::-webkit-scrollbar,
+.pet-bubble-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.pet-card-scroll::-webkit-scrollbar-track,
+.pet-bubble-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pet-card-scroll::-webkit-scrollbar-thumb,
+.pet-bubble-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.18);
+  border-radius: 3px;
+}
+.pet-card-scroll::-webkit-scrollbar-thumb:hover,
+.pet-bubble-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.3);
+}

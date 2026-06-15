@@ -1,0 +1,28 @@
+# Shaula Agent npm publish filter
+#
+# package.json "files" is the main allowlist. This file trims build noise from
+# the packaged Next.js output.
+
+.next/cache/
+.next/trace
+.next/trace-build
+.next/turbopack
+.next/types/
+.next/diagnostics/
+
+# Source maps are not needed in the published package.
+**/*.map
+
+# Platform and editor noise
+.DS_Store
+node_modules/
+src/
+app/
+scripts/
+electron/
+docs/
+build/
+*.tsbuildinfo
+tsconfig*.json
+postcss.config.*
+tailwind.config.*

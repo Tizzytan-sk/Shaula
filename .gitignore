@@ -1,0 +1,35 @@
+node_modules
+.next
+out
+dist
+build
+.env
+.env.*
+!.env.example
+.env*.local
+*.log
+.DS_Store
+tsconfig.tsbuildinfo
+*.tgz
+*.backup
+*.bak
+*.bak*
+.package-lock.json.backup
+.package.json.backup
+--full-page
+# Local agent artifacts such as generated images and debug dumps
+output/
+.scratch/
+.claude/
+.learnings/
+CLAUDE.md
+
+# Local dogfood reports should be sanitized before publication
+docs/quality/
+
+# Codewiz workspace
+.codewiz/
+
+# Playwright artifacts
+test-results/
+playwright-report/

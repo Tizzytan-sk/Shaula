@@ -1,0 +1,60 @@
+name: Build and upload desktop installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to upload to"
+        required: true
+        default: "v0.1.2"
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - run: npm ci
+
+      - run: npm run electron:build
+
+      - name: Upload DMG to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          cp "dist/Shaula Agent-${VERSION}-arm64.dmg" "dist/Shaula.Agent-${VERSION}-arm64.dmg"
+          gh release upload "$TAG" "dist/Shaula.Agent-${VERSION}-arm64.dmg" --clobber
+
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - run: npm ci
+
+      - run: npm run electron:build:win
+
+      - name: Upload Windows installer to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $installer = "dist/Shaula.Agent.Setup-$version-x64.exe"
+          gh release upload "$env:TAG" $installer --clobber
