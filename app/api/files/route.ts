@@ -6,30 +6,19 @@
  *   POST   /api/files?op=move              { from, to } 移动/重命名
  *
  * 软保护：可设 SHAULA_WEB_ROOT 环境变量，仅允许操作该根目录下的路径。
- *   默认值：$HOME（你的 home 目录）。
- *   设为 "" 或 "/" 即关闭限制。
+ *   默认不限制本机路径，方便桌面端选择其他盘符。
+ *   设为 "" 或 "/" 同样关闭限制。
  */
 import { NextResponse } from "next/server";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { getShaulaWebRoot } from "@/lib/shaula-paths";
+import { assertFileAccessAllowed } from "@/lib/file-access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function getRoot(): string {
-  return getShaulaWebRoot();
-}
-
 function assertAllowed(p: string) {
-  const root = getRoot();
-  const abs = path.resolve(p);
-  if (root === "/") return abs;
-  const rel = path.relative(root, abs);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new Error(`path outside SHAULA_WEB_ROOT (${root}): ${abs}`);
-  }
-  return abs;
+  return assertFileAccessAllowed(p);
 }
 
 function err(msg: string, status = 400) {

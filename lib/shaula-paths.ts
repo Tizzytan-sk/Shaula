@@ -16,9 +16,16 @@ function expandHome(value: string): string {
   return value;
 }
 
+function normalizeConfiguredPath(value: string): string {
+  if (process.platform === "win32" && /^[a-zA-Z]:$/.test(value)) {
+    return `${value}\\`;
+  }
+  return value;
+}
+
 export function getShaulaStateRoot(): string {
   const explicit = cleanEnv(process.env.SHAULA_HOME);
-  if (explicit) return path.resolve(expandHome(explicit));
+  if (explicit) return path.resolve(normalizeConfiguredPath(expandHome(explicit)));
 
   return path.join(os.homedir(), PRIMARY_STATE_DIR);
 }
@@ -27,7 +34,15 @@ export function getShaulaWebRoot(): string {
   const configured = process.env.SHAULA_WEB_ROOT;
   if (configured === undefined) return os.homedir();
   if (configured === "" || configured === "/") return "/";
-  return path.resolve(expandHome(configured));
+  return path.resolve(normalizeConfiguredPath(expandHome(configured)));
+}
+
+export function getShaulaFileAccessRoot(): string | undefined {
+  const configured = process.env.SHAULA_WEB_ROOT;
+  if (configured === undefined || configured === "" || configured === "/") {
+    return undefined;
+  }
+  return path.resolve(normalizeConfiguredPath(expandHome(configured)));
 }
 
 export function getShaulaEnv(primaryName: string): string | undefined {

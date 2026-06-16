@@ -114,21 +114,42 @@ function isProbablyText(name: string, content: string): boolean {
 }
 
 function basename(p: string): string {
-  const i = p.lastIndexOf("/");
-  return i >= 0 ? p.slice(i + 1) : p;
+  const normalized = normalizePathInput(p);
+  if (isWindowsDriveRoot(normalized)) return `${normalized.slice(0, 2)}\\`;
+  const trimmed = normalized.replace(/[\\/]+$/, "");
+  const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return i >= 0 ? trimmed.slice(i + 1) : trimmed;
 }
 
 function dirname(p: string): string {
-  if (p === "/" || p === "") return "/";
-  const trimmed = p.replace(/\/+$/, "");
-  const i = trimmed.lastIndexOf("/");
+  const normalized = normalizePathInput(p);
+  if (normalized === "/" || normalized === "") return "/";
+  if (isWindowsDriveRoot(normalized)) return `${normalized.slice(0, 2)}\\`;
+  const trimmed = normalized.replace(/[\\/]+$/, "");
+  const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (/^[a-zA-Z]:$/.test(trimmed)) return `${trimmed}\\`;
+  if (i === 2 && /^[a-zA-Z]:/.test(trimmed)) return `${trimmed.slice(0, 2)}\\`;
   if (i <= 0) return "/";
   return trimmed.slice(0, i);
 }
 
 function joinPath(dir: string, name: string): string {
-  if (dir === "/") return `/${name}`;
-  return `${dir.replace(/\/+$/, "")}/${name}`;
+  const normalized = normalizePathInput(dir);
+  if (normalized === "/") return `/${name}`;
+  const sep = /^[a-zA-Z]:/.test(normalized) || normalized.includes("\\") ? "\\" : "/";
+  const trimmed = normalized.replace(/[\\/]+$/, "");
+  if (/^[a-zA-Z]:$/.test(trimmed)) return `${trimmed}\\${name}`;
+  return `${trimmed}${sep}${name}`;
+}
+
+function normalizePathInput(value: string): string {
+  const trimmed = value.trim();
+  if (/^[a-zA-Z]:$/.test(trimmed)) return `${trimmed}\\`;
+  return trimmed;
+}
+
+function isWindowsDriveRoot(value: string): boolean {
+  return /^[a-zA-Z]:[\\/]*$/.test(value);
 }
 
 /** ============ 单个目录节点（递归） ============ */
@@ -244,6 +265,24 @@ function DirNode({
             ↻
           </button>
         )}
+        {onPickPath && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onPickPath(path);
+            }}
+            className="shrink-0 inline-flex min-h-[24px] items-center gap-1 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+            style={{
+              borderColor: "var(--border)",
+              color: "var(--fg-muted)",
+            }}
+            title={`选择文件夹: ${path}`}
+          >
+            <CornerDownRight size={11} />
+            <span>选文件夹</span>
+          </button>
+        )}
       </div>
       {open && (
         <div>
@@ -354,7 +393,7 @@ function SearchResultList({
   truncated: boolean;
   loading: boolean;
   query: string;
-  onPick: (absPath: string) => void;
+  onPick?: (absPath: string) => void;
   onEnterDir: (absPath: string) => void;
 }) {
   if (loading && hits.length === 0) {
@@ -380,29 +419,48 @@ function SearchResultList({
   return (
     <div>
       {hits.map((h) => (
-        <button
+        <div
           key={h.path}
-          type="button"
-          onClick={() => (h.isDir ? onEnterDir(h.path) : onPick(h.path))}
-          className="w-full text-left flex flex-col gap-0 px-2 py-1 text-xs hover:bg-[color:var(--bg-hover)]"
+          className="flex items-center gap-1 px-2 py-1 text-xs hover:bg-[color:var(--bg-hover)]"
           style={{ color: "var(--fg)" }}
           title={h.path}
         >
-          <span className="flex items-center gap-1 truncate">
-            {h.isDir ? (
-              <Folder size={11} style={{ color: "var(--fg-muted)" }} />
-            ) : (
-              <File size={11} style={{ color: "var(--fg-muted)" }} />
-            )}
-            <span className="truncate">{h.name}</span>
-          </span>
-          <span
-            className="truncate text-token-xs"
-            style={{ color: "var(--fg-faint)", paddingLeft: 14 }}
+          <button
+            type="button"
+            onClick={() => (h.isDir ? onEnterDir(h.path) : onPick?.(h.path))}
+            className="min-w-0 flex-1 text-left flex flex-col gap-0"
           >
-            {h.path}
-          </span>
-        </button>
+            <span className="flex items-center gap-1 truncate">
+              {h.isDir ? (
+                <Folder size={11} style={{ color: "var(--fg-muted)" }} />
+              ) : (
+                <File size={11} style={{ color: "var(--fg-muted)" }} />
+              )}
+              <span className="truncate">{h.name}</span>
+            </span>
+            <span
+              className="truncate text-token-xs"
+              style={{ color: "var(--fg-faint)", paddingLeft: 14 }}
+            >
+              {h.path}
+            </span>
+          </button>
+          {h.isDir && onPick && (
+            <button
+              type="button"
+              onClick={() => onPick(h.path)}
+              className="shrink-0 inline-flex min-h-[24px] items-center gap-1 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+              style={{
+                borderColor: "var(--border)",
+                color: "var(--fg-muted)",
+              }}
+              title={`选择文件夹: ${h.path}`}
+            >
+              <CornerDownRight size={11} />
+              <span>选文件夹</span>
+            </button>
+          )}
+        </div>
       ))}
       {truncated && (
         <div
@@ -987,8 +1045,9 @@ export default function FileBrowser({
   mode = "full",
 }: Props) {
   const isPicker = mode === "picker";
-  const [root, setRoot] = useState(initialPath);
-  const [pathDraft, setPathDraft] = useState(initialPath);
+  const normalizedInitialPath = normalizePathInput(initialPath || "/");
+  const [root, setRoot] = useState(normalizedInitialPath);
+  const [pathDraft, setPathDraft] = useState(normalizedInitialPath);
   /** picker 模式下顶部搜索框,< 2 字符按当前层 substring 过滤,>= 2 字符走递归搜索 */
   const [filter, setFilter] = useState("");
   /** 递归搜索结果(picker 模式专用)。null = 还没搜或不在搜索态;[] = 搜了无结果 */
@@ -1010,8 +1069,9 @@ export default function FileBrowser({
     }
   });
   const pushRecentRoot = useCallback((p: string) => {
+    const normalized = normalizePathInput(p || "/");
     setRecentRoots((cur) => {
-      const next = [p, ...cur.filter((x) => x !== p)].slice(0, 8);
+      const next = [normalized, ...cur.filter((x) => x !== normalized)].slice(0, 8);
       try {
         localStorage.setItem("fileBrowser.recentRoots", JSON.stringify(next));
       } catch {}
@@ -1125,8 +1185,9 @@ export default function FileBrowser({
   useEffect(() => {
     if (prevInitial.current !== initialPath) {
       prevInitial.current = initialPath;
-      setRoot(initialPath);
-      setPathDraft(initialPath);
+      const nextRoot = normalizePathInput(initialPath || "/");
+      setRoot(nextRoot);
+      setPathDraft(nextRoot);
       setTabs([]);
       setActiveTab(null);
       setTabTitles({});
@@ -1138,11 +1199,12 @@ export default function FileBrowser({
   useEffect(() => {
     if (!initialFile || prevInitialFile.current === initialFile) return;
     prevInitialFile.current = initialFile;
-    const nextRoot = dirname(initialFile);
+    const normalizedFile = normalizePathInput(initialFile);
+    const nextRoot = dirname(normalizedFile);
     setRoot(nextRoot);
     setPathDraft(nextRoot);
-    setTabs((cur) => (cur.includes(initialFile) ? cur : [...cur, initialFile]));
-    setActiveTab(initialFile);
+    setTabs((cur) => (cur.includes(normalizedFile) ? cur : [...cur, normalizedFile]));
+    setActiveTab(normalizedFile);
     setViewerHidden(false);
     setTreeCollapsed(false);
   }, [initialFile]);
@@ -1202,9 +1264,11 @@ export default function FileBrowser({
   }, [root]);
 
   const applyDraft = useCallback(() => {
-    if (pathDraft && pathDraft !== root) {
-      setRoot(pathDraft);
-      if (isPicker) pushRecentRoot(pathDraft);
+    const nextRoot = normalizePathInput(pathDraft);
+    if (nextRoot && nextRoot !== root) {
+      setRoot(nextRoot);
+      setPathDraft(nextRoot);
+      if (isPicker) pushRecentRoot(nextRoot);
     }
   }, [pathDraft, root, isPicker, pushRecentRoot]);
 

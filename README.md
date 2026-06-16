@@ -84,7 +84,8 @@ needs to move into Shaula, run an explicit migration step.
 | `PORT` | `30142` | Server port |
 | `HOSTNAME` | unset | Bind host |
 | `SHAULA_HOME` | `~/.shaula` | Shaula app-state root |
-| `SHAULA_WEB_ROOT` | `$HOME` | File picker and cwd sandbox root |
+| `SHAULA_WEB_ROOT` | unset | Optional default cwd and file-access sandbox root. When unset, the app starts in `$HOME` and the file picker can browse any local drive. |
+| `SHAULA_SHELL_PATH` | auto | Optional shell override for agent command execution. On Windows, Shaula uses Git Bash when found and otherwise falls back to PowerShell. |
 | `SHAULA_UPDATE_OWNER` | `Tizzytan-sk` | GitHub owner for desktop update checks |
 | `SHAULA_UPDATE_REPO` | `Shaula` | GitHub repo for desktop update checks |
 | `BROWSER=none` | unset | Disable browser auto-open on start |

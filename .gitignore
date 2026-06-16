@@ -10,6 +10,7 @@ build
 *.log
 .DS_Store
 tsconfig.tsbuildinfo
+server.js
 *.tgz
 *.backup
 *.bak

@@ -32,6 +32,7 @@ import { agentBrowserId } from "./browser/browser-id";
 import { createClipboardExtension } from "./clipboard/extension";
 import { createGoalExtension } from "./goal/extension";
 import { createProgressExtension } from "./progress/extension";
+import { createShaulaShellExtension } from "./shaula-shell-extension";
 import { createDelegateSubagentsTool } from "./subagents/extension";
 import { createSubagentWriteBoundaryExtension } from "./subagents/write-boundary-extension";
 import {
@@ -1853,6 +1854,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
             }),
           ]
         : []),
+      createShaulaShellExtension({ cwd: opts.cwd }),
       collabExtension,
       clarificationExtension,
       goalExtension,

@@ -26,6 +26,7 @@ const target = join(
 );
 
 const PATCH_MARKER = "// shaula-agent patch:";
+const LEGACY_PATCH_MARKER = "// diga-agent patch:";
 const ORIGINAL_LINE = "async function generateBuildId(generate, fallback) {\n    let buildId = await generate();";
 const PATCHED_LINE = `async function generateBuildId(generate, fallback) {
     ${PATCH_MARKER} Next 16.2.6 zod schema drops the default generateBuildId,
@@ -42,7 +43,7 @@ if (!existsSync(target)) {
 
 const src = readFileSync(target, "utf8");
 
-if (src.includes(PATCH_MARKER)) {
+if (src.includes(PATCH_MARKER) || src.includes(LEGACY_PATCH_MARKER)) {
   console.log("[patch-next] generate-build-id.js already patched");
   process.exit(0);
 }

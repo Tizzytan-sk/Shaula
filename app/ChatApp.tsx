@@ -3084,7 +3084,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           setProviderSetupChild(null);
           setShowProviderSetup(true);
         }}
-        onAuthChanged={() => reloadProviders(false)}
+        onAuthChanged={() => reloadProviders(true)}
         onCloseModelsConfig={() => {
           setProviderSetupChild(null);
           setShowModelsConfig(false);
@@ -3094,7 +3094,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           setProviderSetupChild(null);
           setShowProviderSetup(true);
         }}
-        onModelsConfigChanged={() => reloadProviders(false)}
+        onModelsConfigChanged={() => reloadProviders(true)}
         onCloseSystemPrompt={closeSystemPrompt}
         onCloseBranches={() => setShowBranches(false)}
         onBranchesNavigated={() => {

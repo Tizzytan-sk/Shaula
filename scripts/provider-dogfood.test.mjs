@@ -1,14 +1,6 @@
 import { createServer } from "node:http";
 
-import { describe, expect, it, vi } from "vitest";
-import {
-  parseArgs,
-  PROVIDER_DOGFOOD_CASES,
-  redactSecrets,
-  renderMarkdownReport,
-  runProviderDogfood,
-  selectCases,
-} from "./provider-dogfood.mjs";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("playwright", () => ({
   chromium: {
@@ -27,6 +19,23 @@ vi.mock("playwright", () => ({
     }),
   },
 }));
+
+let parseArgs;
+let PROVIDER_DOGFOOD_CASES;
+let redactSecrets;
+let renderMarkdownReport;
+let runProviderDogfood;
+let selectCases;
+
+beforeAll(async () => {
+  const dogfood = await import("./provider-dogfood.mjs");
+  parseArgs = dogfood.parseArgs;
+  PROVIDER_DOGFOOD_CASES = dogfood.PROVIDER_DOGFOOD_CASES;
+  redactSecrets = dogfood.redactSecrets;
+  renderMarkdownReport = dogfood.renderMarkdownReport;
+  runProviderDogfood = dogfood.runProviderDogfood;
+  selectCases = dogfood.selectCases;
+});
 
 describe("provider dogfood runner", () => {
   it("defines the required provider-backed dogfood cases", () => {
