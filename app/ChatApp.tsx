@@ -51,6 +51,7 @@ import type { SubagentBatch } from "@/lib/subagents/types";
 import {
   emptyRunner,
   DRAFT_KEY,
+  type AgentPhase,
   type RunnerKey,
   type PendingAttachment,
 } from "@/lib/session-runner";
@@ -125,6 +126,57 @@ function shortWorkflowJson(value: unknown, maxChars = 5000): string {
   } catch {
     return String(value);
   }
+}
+
+function extractSessionIdFromPath(p: string | null | undefined): string | null {
+  if (!p) return null;
+  const base = p.split(/[\\/]/).pop() ?? "";
+  const noExt = base.replace(/\.jsonl$/, "");
+  const match = noExt.match(
+    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
+  );
+  return match ? match[1] : null;
+}
+
+function runtimeProgressTitle(agentPhase: AgentPhase): string {
+  if (agentPhase?.kind === "waiting_model") return "等待模型响应";
+  if (agentPhase?.kind === "thinking") return "模型思考中";
+  if (agentPhase?.kind === "running_tools") {
+    const names = agentPhase.tools.map((tool) => tool.name).filter(Boolean);
+    return names.length > 0 ? `执行工具：${names.slice(0, 2).join(", ")}` : "执行工具";
+  }
+  return "正在执行任务";
+}
+
+function progressWithRuntimeFallback(
+  progress: AgentProgress | null,
+  streaming: boolean,
+  agentPhase: AgentPhase
+): AgentProgress | null {
+  const groups = progress?.groups ?? [];
+  const steps = groups.at(-1)?.steps ?? progress?.steps ?? [];
+  if (!streaming || steps.length > 0) return progress;
+  const now = Date.now();
+  const step = {
+    id: "runtime-active",
+    title: runtimeProgressTitle(agentPhase),
+    status: "running" as const,
+    summary: "agent 已开始执行，等待结构化进度更新。",
+    startedAt: now,
+  };
+  return {
+    steps: [step],
+    groups: [
+      {
+        id: "runtime-active",
+        index: 1,
+        steps: [step],
+        startedAt: now,
+      },
+    ],
+    artifacts: progress?.artifacts ?? [],
+    updatedAt: now,
+  };
 }
 
 function workflowTraceSummary(event: WorkflowTraceEvent): string {
@@ -228,6 +280,29 @@ function UpdateLatestNotice({
           title="关闭"
           aria-label="关闭更新状态提示"
         />
+      </div>
+    </div>
+  );
+}
+
+function SessionLoadingState({
+  session,
+}: {
+  session: SessionInfoLite | null;
+}) {
+  return (
+    <div className="flex flex-1 items-center justify-center px-6">
+      <div className="flex max-w-sm flex-col items-center text-center">
+        <Loader2
+          size={22}
+          className="mb-3 animate-spin text-[color:var(--accent)]"
+        />
+        <div className="text-token-ui font-semibold text-[color:var(--text)]">
+          正在打开任务
+        </div>
+        <div className="mt-1 max-w-[320px] truncate text-token-sm text-[color:var(--text-muted)]">
+          {session?.meta?.title || session?.name || session?.firstMessage || "加载历史上下文"}
+        </div>
       </div>
     </div>
   );
@@ -722,6 +797,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 提供 groupedSessions / refreshSessions / submitRename / executeDeleteSession 等。
   const {
     sessions,
+    setSessions,
     selectedId,
     setSelectedId,
     lastSeenMap,
@@ -750,6 +826,50 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const { soundEnabled, onSoundToggle, playDoneSound } = useAudio();
   const [cwd, setCwd] = useState(defaultCwd);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const addOptimisticSession = useCallback(
+    ({
+      sessionId,
+      sessionFile,
+      title,
+      running = false,
+    }: {
+      sessionId?: string | null;
+      sessionFile?: string | null;
+      title?: string | null;
+      running?: boolean;
+    }) => {
+      if (!sessionFile) return;
+      const id = sessionId ?? extractSessionIdFromPath(sessionFile);
+      if (!id) return;
+      const now = new Date().toISOString();
+      const label = title?.trim() || "新任务";
+      setSessions((prev) => {
+        const existing = prev.find((session) => session.id === id);
+        const optimistic: SessionInfoLite = {
+          id,
+          path: sessionFile,
+          cwd,
+          name: existing?.name ?? label,
+          firstMessage: existing?.firstMessage ?? label,
+          created: existing?.created ?? now,
+          modified: now,
+          messageCount: existing?.messageCount ?? 0,
+          isRunning: running || existing?.isRunning === true,
+          runtimeState: running ? "streaming" : existing?.runtimeState,
+          parentSessionPath: existing?.parentSessionPath,
+          waitingApprovalCount: existing?.waitingApprovalCount,
+          waitingClarificationCount: existing?.waitingClarificationCount,
+          lastEventSeq: existing?.lastEventSeq,
+          runtimeUpdatedAt: existing?.runtimeUpdatedAt,
+          meta: existing?.meta,
+        };
+        const rest = prev.filter((session) => session.id !== id);
+        return [optimistic, ...rest];
+      });
+    },
+    [cwd, setSessions]
+  );
 
   // 图片/文件附件相关 hook 调用挪到 setter wrappers 之后（依赖 setPendingImages/setPendingFiles）
 
@@ -1049,11 +1169,23 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   }, [persistWorkbench]);
   const selectSessionAndCloseWorkbench = useCallback(
     (id: string) => {
+      const target = sessions.find((session) => session.id === id);
+      if (target) {
+        const key: RunnerKey = target.path;
+        if (!runnersRef.current.has(key)) {
+          setRunner(key, {
+            ...emptyRunner(),
+            sessionFile: target.path,
+            sessionLoading: true,
+          });
+        }
+        switchTo(key);
+      }
       setSelectedId(id);
       setWorkbenchOpen(false);
       persistWorkbench(false, { type: "overview" });
     },
-    [persistWorkbench, setSelectedId]
+    [persistWorkbench, runnersRef, sessions, setRunner, setSelectedId, switchTo]
   );
   const toggleWorkbench = useCallback(() => {
     setWorkbenchOpen((prev) => {
@@ -1128,6 +1260,24 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     const id = window.setTimeout(() => setLatestNoticeHidden(true), 5000);
     return () => window.clearTimeout(id);
   }, [latestNoticeHidden, updateState?.status, updateState?.checkedAt]);
+  const openCwdPicker = useCallback(() => {
+    if (!electronApi?.selectDirectory) {
+      setShowCwdPicker(true);
+      return;
+    }
+    void electronApi
+      .selectDirectory({
+        title: "选择项目文件夹",
+        defaultPath: cwd || undefined,
+      })
+      .then((picked) => {
+        if (picked) setCwd(picked);
+      })
+      .catch((e) => {
+        setError(userFacingMessage(e));
+        setShowCwdPicker(true);
+      });
+  }, [cwd, electronApi, setShowCwdPicker]);
   const checkForUpdates = useCallback(() => {
     if (!electronApi?.updater) return;
     setUpdateNoticeHidden(false);
@@ -1269,6 +1419,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     sessionFile: currentSessionFile,
     pendingImages,
     pendingFiles,
+    sessionLoading,
     streaming,
     agentPhase,
     compacting,
@@ -1283,6 +1434,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     supportsThinking,
     sseStatus,
   } = activeSnapshot;
+  const displayProgress = useMemo(
+    () => progressWithRuntimeFallback(progress, streaming, agentPhase),
+    [agentPhase, progress, streaming]
+  );
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedId) ?? null,
     [selectedId, sessions]
@@ -1308,11 +1463,14 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     ]
   );
 
-  // Composer should only enter Steer/Follow-up/Stop mode while the agent is
-  // actually streaming. Progress steps may be left pending by older tool traces
-  // or restored history; those should not make the input look like it is still
-  // outputting after the assistant has already finished.
-  const abortable = streaming;
+  // Stop should also be available when the run is paused on a user decision.
+  // Steer / follow-up stay disabled unless streaming; abort remains useful for
+  // "waiting_user" tasks that otherwise look stuck.
+  const showAbort =
+    streaming ||
+    selectedSession?.isRunning === true ||
+    selectedSession?.runtimeState === "waiting_user";
+  const abortable = Boolean(agentId) && showAbort;
 
   const openUrlInBrowserPanel = useCallback(
     (url: string) => {
@@ -1610,7 +1768,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   useEffect(() => {
     if (!stickToBottomRef.current) return;
     scrollMessagesToBottom();
-  }, [progress?.updatedAt, scrollMessagesToBottom]);
+  }, [displayProgress?.updatedAt, scrollMessagesToBottom]);
 
   // 选已有 session(P1-8):
   //  - runnersRef 已有该 session 的 runner → 直接 switchTo(不动 SSE,后台流式继续)
@@ -1623,27 +1781,28 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     if (!sel) return;
     const key: RunnerKey = sel.path;
 
-    if (runnersRef.current.has(key)) {
+    const existingRunner = runnersRef.current.get(key);
+    if (existingRunner && !existingRunner.sessionLoading) {
       // 已有 runner —— 直接切。后台 SSE 继续,切回时累积内容立即可见。
-      // P2-I: 进入 transition，让输入框不被列表 reconcile 阻塞。
-      startTransition(() => {
-        switchTo(key);
-      });
+      switchTo(key);
       return;
     }
 
-    // 冷启动:建空 runner,先切过去显示空(很快),再异步填 context
-    const fresh = emptyRunner();
-    fresh.sessionFile = sel.path;
-    startTransition(() => {
-      setRunner(key, fresh);
-      switchTo(key);
-    });
+    // 冷启动:建 loading runner,先切过去显示加载态,再异步填 context
+    if (!existingRunner) {
+      setRunner(key, {
+        ...emptyRunner(),
+        sessionFile: sel.path,
+        sessionLoading: true,
+      });
+    }
+    switchTo(key);
 
     void fetch(`/api/sessions/${selectedId}/context`)
       .then((r) => r.json())
       .then((ctx) => {
         if (ctx.error) {
+          updateRunner(key, { sessionLoading: false });
           setError(ctx.error);
           return;
         }
@@ -1668,11 +1827,15 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             ...(ctx.progress
               ? { progress: ctx.progress as AgentProgress }
               : {}),
+            sessionLoading: false,
           });
         });
       })
-      .catch((e) => setError(userFacingMessage(e, { context: "settings" })));
-     
+      .catch((e) => {
+        updateRunner(key, { sessionLoading: false });
+        setError(userFacingMessage(e, { context: "settings" }));
+      });
+
   }, [runnersRef, selectedId, sessions, setRunner, switchTo, updateRunner]);
 
   // refreshForkList 已挪到 useForkable hook（C1）
@@ -1877,7 +2040,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         setError(userFacingMessage(data.error, { context: "settings" }));
         return;
       }
-      updateRunner(DRAFT_KEY, {
+      const nextRunner = {
+        ...emptyRunner(),
         agentId: data.id,
         agentSessionId: data.sessionId,
         sessionFile: data.sessionFile ?? null,
@@ -1893,10 +2057,33 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         ...(typeof data.supportsThinking === "boolean"
           ? { supportsThinking: data.supportsThinking }
           : {}),
-      });
-      attachSseFor(DRAFT_KEY, data.id);
-      void refreshStats(data.id, DRAFT_KEY);
-      void refreshToolsCount(data.id, DRAFT_KEY);
+      };
+      const sessionFile =
+        typeof data.sessionFile === "string" ? data.sessionFile : null;
+      const ownerKey = sessionFile ?? DRAFT_KEY;
+      if (sessionFile) {
+        setRunner(sessionFile, nextRunner);
+        addOptimisticSession({
+          sessionId:
+            typeof data.sessionId === "string" ? data.sessionId : null,
+          sessionFile,
+          title: "新任务",
+        });
+        setSelectedId(
+          typeof data.sessionId === "string"
+            ? data.sessionId
+            : extractSessionIdFromPath(sessionFile)
+        );
+        storeSetInput(sessionFile, "");
+        switchTo(sessionFile);
+        setRunner(DRAFT_KEY, emptyRunner());
+      } else {
+        updateRunner(DRAFT_KEY, nextRunner);
+      }
+      attachSseFor(ownerKey, data.id);
+      refreshSessions();
+      void refreshStats(data.id, ownerKey);
+      void refreshToolsCount(data.id, ownerKey);
     } catch (e) {
       setError(userFacingMessage(e, { context: "settings" }));
     }
@@ -1910,11 +2097,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     switchTo,
     setRunner,
     setSelectedId,
+    refreshSessions,
     runnersRef,
     closeSseFor,
     attachSseFor,
     updateRunner,
     persistWorkbench,
+    addOptimisticSession,
   ]);
 
   // ===== SSE agent 事件分发器（RFC-1 阶段 A3，已抽到 useAgentEvents） =====
@@ -2017,6 +2206,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     setPendingFiles,
     setError,
     setSelectedId,
+    refreshSessions,
+    onSessionCreated: addOptimisticSession,
     refreshStats,
     refreshToolsCount,
     pendingPinUserCountRef,
@@ -2676,7 +2867,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
         cwd={cwd}
-        setShowCwdPicker={setShowCwdPicker}
+        onOpenCwdPicker={openCwdPicker}
         theme={theme}
         onToggleTheme={toggleTheme}
         updateAvailable={updateState?.status === "available"}
@@ -2685,10 +2876,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         onOpenProviderSetup={() => {
           setProviderSetupChild(null);
           setShowProviderSetup(true);
-        }}
-        onOpenAuth={() => {
-          setProviderSetupChild(null);
-          openAuth();
         }}
         onOpenSettings={() => {
           window.location.assign("/settings");
@@ -2770,7 +2957,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           budgetSpent={budgetSpent}
           budgetStatus={budgetStatus}
           budgetHasOverride={budgetHasOverride}
-          hasAuthedProviders={visibleProviders.length > 0}
           onToggleSidebar={() => setSidebarOpen((v) => !v)}
           onToggleTheme={toggleTheme}
           onOpenBranches={openBranches}
@@ -2786,10 +2972,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           onOpenProviderSetup={() => {
             setProviderSetupChild(null);
             setShowProviderSetup(true);
-          }}
-          onOpenAuth={() => {
-            setProviderSetupChild(null);
-            openAuth();
           }}
           onOpenSettings={(section) => {
             window.location.assign(
@@ -2817,7 +2999,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           />
         ) : null}
 
-        {messages.length === 0 && !error && !progress ? (
+        {sessionLoading && messages.length === 0 ? (
+          <SessionLoadingState session={selectedSession} />
+        ) : messages.length === 0 && !error && !displayProgress ? (
           <EmptyState
             providerLabel={currentProvider?.provider ?? providerId}
             modelLabel={modelId}
@@ -2969,7 +3153,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         isResizing={rightPanelResizing}
         agentId={agentId}
         runtimeIdentity={runtimeIdentity}
-        progress={progress}
+        progress={displayProgress}
+        streaming={streaming}
         browserSnapshot={activeSnapshot.browser}
         browserOpenRequest={browserOpenRequest}
         stats={stats}
@@ -2983,6 +3168,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         filesLayout={filesLayout}
         onSplitterMouseDown={onSplitterMouseDown}
         onOpenView={openWorkbench}
+        onAbort={onAbort}
         onPickPath={(absPath) => {
           // 把路径加到输入框末尾（用 @ 前缀，pi-coding-agent 约定的引用语法）
           setInput((cur) => {

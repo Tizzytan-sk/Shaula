@@ -42,6 +42,53 @@ import ToolRender from "./ToolRender";
 import { ApprovalBubble } from "./ApprovalBubble";
 import { ClarificationCard } from "./ClarificationCard";
 
+const USER_TEXT_COLLAPSE_CHARS = 800;
+const USER_TEXT_COLLAPSE_LINES = 10;
+
+function shouldCollapseUserText(text: string): boolean {
+  return (
+    text.length > USER_TEXT_COLLAPSE_CHARS ||
+    text.split(/\r?\n/).length > USER_TEXT_COLLAPSE_LINES
+  );
+}
+
+function collapsedUserText(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const byLines =
+    lines.length > USER_TEXT_COLLAPSE_LINES
+      ? `${lines.slice(0, 6).join("\n")}\n...`
+      : text;
+  return byLines.length > USER_TEXT_COLLAPSE_CHARS
+    ? `${byLines.slice(0, USER_TEXT_COLLAPSE_CHARS).trimEnd()}...`
+    : byLines;
+}
+
+function UserTextBubble({ text }: { text: string }) {
+  const collapsible = shouldCollapseUserText(text);
+  const [expanded, setExpanded] = useState(!collapsible);
+  const visibleText = expanded ? text : collapsedUserText(text);
+  return (
+    <div
+      className="inline-block whitespace-pre-wrap rounded-token-lg px-3.5 py-2 text-sm"
+      style={{
+        background: "var(--user-bg)",
+        color: "var(--text)",
+      }}
+    >
+      {visibleText}
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="mt-2 block text-token-xs font-medium text-[color:var(--accent)] hover:underline"
+        >
+          {expanded ? "收起全文" : "展开全文"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export interface MessageViewProps {
   msg: ChatMessage;
   index: number;
@@ -158,18 +205,7 @@ export const MessageView = memo(function MessageView({
           {parts.map((p, i) => {
             if (p.kind === "text") {
               if (!p.text) return null;
-              return (
-                <div
-                  key={i}
-                  className="inline-block whitespace-pre-wrap rounded-token-lg px-3.5 py-2 text-sm"
-                  style={{
-                    background: "var(--user-bg)",
-                    color: "var(--text)",
-                  }}
-                >
-                  {p.text}
-                </div>
-              );
+              return <UserTextBubble key={i} text={p.text} />;
             }
             if (p.kind === "image") {
               const src = `data:${p.mimeType};base64,${p.data}`;
@@ -203,6 +239,17 @@ export const MessageView = memo(function MessageView({
           className="text-token-xs mt-1 flex items-center gap-2"
           style={{ color: "var(--text-muted)" }}
         >
+          {msg.delivery?.status === "pending" ? (
+            <span>发送中…</span>
+          ) : null}
+          {msg.delivery?.status === "failed" ? (
+            <span
+              className="text-[color:var(--color-danger)]"
+              title={msg.delivery.error}
+            >
+              发送失败
+            </span>
+          ) : null}
           {!isForking && (
             <span className="opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center gap-3">
               {joinedText && (

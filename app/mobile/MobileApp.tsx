@@ -140,6 +140,7 @@ const MOBILE_CONTEXT_TAIL_MESSAGES = 80;
 const MOBILE_MESSAGE_WINDOW = 36;
 const MOBILE_MESSAGE_WINDOW_STEP = 24;
 const MOBILE_REMOTE_STORAGE_KEY = "shaula-remote";
+const MOBILE_LEGACY_REMOTE_STORAGE_KEY = "shaula-agent-remote";
 const MOBILE_PROVIDER_STORAGE_KEY = "shaula-mobile-provider-id";
 const MOBILE_MODEL_STORAGE_KEY = "shaula-mobile-model-id";
 const MOBILE_MODEL_VERSION_STORAGE_KEY =
@@ -308,7 +309,13 @@ function loadRemoteStorage(): RemoteStorage | null {
       return parsed;
     }
     const raw = localStorage.getItem(MOBILE_REMOTE_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as RemoteStorage) : null;
+    if (raw) return JSON.parse(raw) as RemoteStorage;
+    const legacyRaw = localStorage.getItem(MOBILE_LEGACY_REMOTE_STORAGE_KEY);
+    if (!legacyRaw) return null;
+    const legacyStorage = JSON.parse(legacyRaw) as RemoteStorage;
+    persistRemoteStorage(legacyStorage);
+    localStorage.removeItem(MOBILE_LEGACY_REMOTE_STORAGE_KEY);
+    return legacyStorage;
   } catch {
     return null;
   }
@@ -321,6 +328,7 @@ function persistRemoteStorage(storage: RemoteStorage): void {
 
 function clearRemoteStorage(): void {
   localStorage.removeItem(MOBILE_REMOTE_STORAGE_KEY);
+  localStorage.removeItem(MOBILE_LEGACY_REMOTE_STORAGE_KEY);
   document.cookie = `${MOBILE_REMOTE_STORAGE_KEY}=; Max-Age=0; Path=/`;
 }
 

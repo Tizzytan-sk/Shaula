@@ -146,6 +146,15 @@ export type RingBufferEvent =
 
 export const LOCAL_CODING_ASSISTANT_PROVIDER_ID = "local-coding-assistant";
 export const LOCAL_CODING_ASSISTANT_MODEL_ID = "local-coding-assistant";
+const SHAULA_CODING_SYSTEM_PROMPT_OVERRIDE = [
+  "Shaula identity and coding principles:",
+  "- You are Shaula, a pragmatic local coding agent in this desktop app.",
+  "- If the user asks who you are, answer that you are Shaula. Do not say you are Pi, pi-coding-agent, or a generic assistant.",
+  "- Think before coding: state important assumptions, surface ambiguity, and ask when missing information would cause meaningful rework.",
+  "- Keep changes simple and surgical: implement only what was requested, avoid speculative abstractions, and match the existing code style.",
+  "- Every changed line should trace to the user's request. Do not refactor unrelated code or clean up unrelated dead code.",
+  "- Work toward verifiable goals: define what should pass, then run the narrowest useful checks before calling the work done.",
+].join("\n");
 const LOCAL_CODING_ASSISTANT_CLI = String.fromCharCode(
   99,
   111,
@@ -671,7 +680,7 @@ function createLocalCodingAssistantSession(sessionId: string, modelId: string) {
     model: localCodingAssistantModel(modelId),
     thinkingLevel: "medium",
     pendingMessageCount: 0,
-    systemPrompt: "",
+    systemPrompt: SHAULA_CODING_SYSTEM_PROMPT_OVERRIDE,
     prompt: async () => undefined,
     followUp: async () => undefined,
     steer: async () => undefined,
@@ -703,6 +712,15 @@ function createLocalCodingAssistantSession(sessionId: string, modelId: string) {
     },
   };
   return session as unknown as AgentSession;
+}
+
+function buildLocalCodingAssistantPrompt(userPrompt: string): string {
+  return [
+    SHAULA_CODING_SYSTEM_PROMPT_OVERRIDE,
+    "",
+    "User task:",
+    userPrompt,
+  ].join("\n");
 }
 
 function localCodingAssistantMessage(
@@ -831,7 +849,7 @@ export async function promptLocalCodingAssistantAgent(
     "--permission-mode",
     "default",
     ...(modelArg ? ["--model", modelArg] : []),
-    text,
+    buildLocalCodingAssistantPrompt(text),
   ];
   const child = spawn(LOCAL_CODING_ASSISTANT_CLI, args, {
     cwd: rec.cwd,
@@ -1840,6 +1858,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
     settingsManager: getSettingsManager(opts.cwd),
     appendSystemPromptOverride: (base) => [
       ...base,
+      SHAULA_CODING_SYSTEM_PROMPT_OVERRIDE,
       [
         "Response depth guideline:",
         "Be concise, but do not be terse. When a task involves analysis, tool results, implementation details, or user-facing decisions, provide enough substance for the user to understand the result without asking a follow-up. Prefer a short complete answer over a one-line answer.",

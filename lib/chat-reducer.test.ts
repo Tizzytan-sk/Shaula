@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  appendOptimisticUserMessage,
   appendRestoredSubagentBatches,
   applyEvent,
   createInitialState,
   ctxToMessages,
+  markOptimisticUserMessage,
 } from "./chat-reducer";
 import type { ChatMessage, MessagePart } from "./types";
 
@@ -393,6 +395,68 @@ describe("appendRestoredSubagentBatches", () => {
 });
 
 describe("applyEvent — shim duplicate completion guards", () => {
+  it("keeps an optimistic user message visible before SSE confirms it", () => {
+    const state = appendOptimisticUserMessage(createInitialState(), {
+      text: "do the task",
+      clientRequestId: "req-1",
+      timestamp: 100,
+    });
+
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]).toMatchObject({
+      role: "user",
+      text: "do the task",
+      delivery: { status: "pending", clientRequestId: "req-1" },
+    });
+  });
+
+  it("replaces a matching optimistic user message when the real user event arrives", () => {
+    let state = appendOptimisticUserMessage(createInitialState(), {
+      text: "do the task",
+      clientRequestId: "req-1",
+      timestamp: 100,
+    });
+
+    state = applyEvent(state, {
+      type: "message_start",
+      message: {
+        role: "user",
+        timestamp: 200,
+        content: [{ type: "text", text: "do the task" }],
+      },
+    });
+
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]).toEqual({
+      role: "user",
+      parts: [{ kind: "text", text: "do the task" }],
+      text: "do the task",
+      timestamp: 200,
+    });
+  });
+
+  it("can mark an optimistic user message failed without removing it", () => {
+    const state = markOptimisticUserMessage(
+      appendOptimisticUserMessage(createInitialState(), {
+        text: "do the task",
+        clientRequestId: "req-1",
+      }),
+      "req-1",
+      { status: "failed", error: "network down" }
+    );
+
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]).toMatchObject({
+      role: "user",
+      text: "do the task",
+      delivery: {
+        status: "failed",
+        clientRequestId: "req-1",
+        error: "network down",
+      },
+    });
+  });
+
   it("message_end 认证失效且 content 为空 → 不保留空 assistant 气泡", () => {
     let s = createInitialState();
     const message = {

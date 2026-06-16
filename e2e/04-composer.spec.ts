@@ -43,6 +43,52 @@ test("composer: queue_update 显示 queued follow-up 内容", async ({
   await expect(page.getByText("then summarize changes")).toBeVisible();
 });
 
+test("composer: submitted prompt is visible before assistant SSE arrives", async ({
+  bootedPage: page,
+}) => {
+  await editor(page).fill("this prompt should stay visible");
+  await sendBtn(page).click();
+
+  await expect(
+    page.locator("div.whitespace-pre-wrap", {
+      hasText: "this prompt should stay visible",
+    })
+  ).toBeVisible();
+  await expect(editor(page)).toHaveValue("");
+});
+
+test("composer: long submitted prompt is folded by default", async ({
+  bootedPage: page,
+}) => {
+  const longPrompt = `任务说明\n${"请分析这段很长的任务内容。".repeat(90)}\n尾部确认文本`;
+  await editor(page).fill(longPrompt);
+  await sendBtn(page).click();
+
+  await expect(page.getByRole("button", { name: "展开全文" })).toBeVisible();
+  await expect(page.getByText("尾部确认文本")).not.toBeVisible();
+
+  await page.getByRole("button", { name: "展开全文" }).click();
+  await expect(page.getByText("尾部确认文本")).toBeVisible();
+});
+
+test("composer: running task shows stop next to send actions", async ({
+  bootedPage: page,
+}) => {
+  await editor(page).fill("run a task that needs abort");
+  await sendBtn(page).click();
+  const agentId = await activeAgentId(page);
+
+  await pushSseEvent(page, agentId, { type: "agent_start" }, "run-start");
+
+  await expect(page.getByRole("button", { name: "Steer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Follow-up" })).toBeVisible();
+  await expect(page.getByTestId("composer-stop-task")).toBeVisible();
+
+  await page.getByTestId("composer-stop-task").click();
+  await expect(page.getByTestId("composer-stop-task")).toBeHidden();
+  await expect(sendBtn(page)).toBeVisible();
+});
+
 test("composer: ArrowUp/ArrowDown 召回输入历史", async ({
   bootedPage: page,
 }) => {

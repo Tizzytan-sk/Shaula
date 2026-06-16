@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * 左侧 EXPLORER。直接平铺 cwd 下的条目（pi-web FileExplorer 风格），
+ * 左侧文件夹。直接平铺 cwd 下的条目（pi-web FileExplorer 风格），
  * 不再用一个外层 DirNode 把 cwd 包成"根"，避免 EXPLORER 标题和外层节点重复。
  *
  * 子目录懒加载展开；hover 出现 @ mention 按钮把绝对路径抛给父组件。
@@ -99,15 +99,17 @@ export default function SidebarExplorer({
         <button
           type="button"
           onClick={() => setCollapsed((v) => !v)}
-          className="inline-flex items-center gap-1 text-token-xs font-semibold uppercase tracking-wide hover:opacity-80"
+          className="inline-flex min-w-0 items-center gap-1 text-token-xs font-semibold hover:opacity-80"
           aria-expanded={!collapsed}
+          aria-label={collapsed ? "展开文件夹" : "折叠文件夹"}
+          title={collapsed ? "展开当前项目文件夹" : "折叠当前项目文件夹"}
         >
           {collapsed ? (
             <ChevronRight size={12} />
           ) : (
             <ChevronDown size={12} />
           )}
-          Explorer
+          <span>文件</span>
         </button>
         <div className="flex items-center gap-1">
           <button

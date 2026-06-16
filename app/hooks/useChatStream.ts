@@ -47,6 +47,10 @@ import {
   getInput as getStoreInput,
   setInput as setStoreInput,
 } from "@/lib/composer/input-store";
+import {
+  appendOptimisticUserMessage,
+  markOptimisticUserMessage,
+} from "@/lib/chat-reducer";
 
 type Updater<T> = T | ((prev: T) => T);
 
@@ -92,12 +96,22 @@ function failOpenProgressSteps(progress: AgentProgress | null): AgentProgress | 
  * 后续阶段可统一搬到 lib/session-utils.ts。
  */
 function extractSessionIdFromPath(p: string): string | null {
-  const base = p.split("/").pop() ?? "";
+  const base = p.split(/[\\/]/).pop() ?? "";
   const noExt = base.replace(/\.jsonl$/, "");
   const m = noExt.match(
     /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
   );
   return m ? m[1] : null;
+}
+
+function createClientRequestId(): string {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return crypto.randomUUID();
+  }
+  return `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 export interface UseChatStreamParams {
@@ -136,6 +150,13 @@ export interface UseChatStreamParams {
   // ===== 顶层 state setters =====
   setError: (e: string | null) => void;
   setSelectedId: (id: string | null) => void;
+  refreshSessions: () => void;
+  onSessionCreated?: (args: {
+    sessionId?: string | null;
+    sessionFile?: string | null;
+    title?: string | null;
+    running?: boolean;
+  }) => void;
 
   // ===== 数据拉取（注入，B2-a 不抽） =====
   refreshStats: (aid: string, ownerKey?: RunnerKey) => void | Promise<void>;
@@ -194,6 +215,8 @@ export function useChatStream(
     setPendingFiles,
     setError,
     setSelectedId,
+    refreshSessions,
+    onSessionCreated,
     refreshStats,
     refreshToolsCount,
     pendingPinUserCountRef,
@@ -307,8 +330,14 @@ export function useChatStream(
         ? { supportsThinking: data.supportsThinking }
         : {}),
     });
+    onSessionCreated?.({
+      sessionId: typeof data.sessionId === "string" ? data.sessionId : null,
+      sessionFile: typeof data.sessionFile === "string" ? data.sessionFile : null,
+      title: "新任务",
+    });
     const upgradedKey = upgradeDraftIfNeeded(data.sessionFile ?? null);
     attachSseFor(upgradedKey, data.id);
+    refreshSessions();
     void refreshStats(data.id, upgradedKey);
     void refreshToolsCount(data.id, upgradedKey);
     return { aid: data.id, ownerKey: upgradedKey };
@@ -325,8 +354,10 @@ export function useChatStream(
     updateRunner,
     upgradeDraftIfNeeded,
     attachSseFor,
+    refreshSessions,
     refreshStats,
     refreshToolsCount,
+    onSessionCreated,
     setError,
   ]);
 
@@ -387,10 +418,17 @@ export function useChatStream(
           ? { supportsThinking: data.supportsThinking }
           : {}),
       });
+      onSessionCreated?.({
+        sessionId: typeof data.sessionId === "string" ? data.sessionId : null,
+        sessionFile: typeof data.sessionFile === "string" ? data.sessionFile : null,
+        title: input.trim().slice(0, 80) || "新任务",
+        running: true,
+      });
 
       ownerKeyForPrompt = upgradeDraftIfNeeded(data.sessionFile ?? null);
 
       attachSseFor(ownerKeyForPrompt, data.id);
+      refreshSessions();
       void refreshStats(data.id, ownerKeyForPrompt);
       void refreshToolsCount(data.id, ownerKeyForPrompt);
     } else {
@@ -405,6 +443,9 @@ export function useChatStream(
     // 附件引用单独通过 attachments 字段传给后端，由后端作为上下文 aside 喂给模型，
     // 这样前台气泡只显示用户输入的原文。
     const attachmentPaths = attachments.map((a) => a.path);
+    const displayText =
+      userText || (attachmentPaths.length > 0 ? "(see attachments)" : "(image)");
+    const clientRequestId = createClientRequestId();
     setInput("");
     setPendingImages([]);
     setPendingFiles([]);
@@ -414,15 +455,39 @@ export function useChatStream(
     const currentUserCount = messages.filter((m) => m.role === "user").length;
     pendingPinUserCountRef.current = currentUserCount + 1;
     setPinSpacer(true);
+    updateRunner(ownerKeyForPrompt, (state) => ({
+      chatState: appendOptimisticUserMessage(state.chatState, {
+        text: displayText,
+        images,
+        clientRequestId,
+      }),
+    }));
     try {
       await agentAction(aid!, {
         type: "prompt",
-        text: userText || (attachmentPaths.length > 0 ? "(see attachments)" : "(image)"),
+        text: displayText,
         images: images.length > 0 ? images : undefined,
         attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
+        clientRequestId,
       });
-    } catch {
-      /* error 已被 agentAction 设置 */
+      updateRunner(ownerKeyForPrompt, (state) => ({
+        chatState: markOptimisticUserMessage(
+          state.chatState,
+          clientRequestId,
+          { status: "sent" }
+        ),
+      }));
+    } catch (error) {
+      updateRunner(ownerKeyForPrompt, (state) => ({
+        chatState: markOptimisticUserMessage(
+          state.chatState,
+          clientRequestId,
+          {
+            status: "failed",
+            error: userFacingMessage(error),
+          }
+        ),
+      }));
     }
   }, [
     agentId,
@@ -441,6 +506,8 @@ export function useChatStream(
     agentAction,
     refreshStats,
     refreshToolsCount,
+    refreshSessions,
+    onSessionCreated,
     updateRunner,
     activeKeyRef,
     upgradeDraftIfNeeded,

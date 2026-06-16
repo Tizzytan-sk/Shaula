@@ -5,7 +5,6 @@ import {
   FileText,
   GitBranch,
   Globe2,
-  KeyRound,
   Loader2,
   PanelLeft,
   PanelRight,
@@ -49,7 +48,6 @@ interface TopHeaderProps {
   budgetSpent: BudgetSpent;
   budgetStatus: BudgetStatus;
   budgetHasOverride: boolean;
-  hasAuthedProviders: boolean;
   onToggleSidebar: () => void;
   onToggleTheme: () => void;
   onOpenBranches: () => void;
@@ -57,7 +55,6 @@ interface TopHeaderProps {
   onOpenWorkflows: () => void;
   onRevealInFinder: () => void;
   onOpenProviderSetup: () => void;
-  onOpenAuth: () => void;
   onOpenSettings: (section?: "mobile") => void;
   onReconnectSession: () => void;
   onToggleTools: () => void;
@@ -520,7 +517,6 @@ export function TopHeader({
   budgetSpent,
   budgetStatus,
   budgetHasOverride,
-  hasAuthedProviders,
   onToggleSidebar,
   onReconnectSession,
   onToggleTools,
@@ -528,7 +524,6 @@ export function TopHeader({
   onOpenBranches,
   onOpenSystemPrompt,
   onOpenProviderSetup,
-  onOpenAuth,
   onOpenSettings,
   onCheckForUpdates,
 }: TopHeaderProps) {
@@ -679,16 +674,6 @@ export function TopHeader({
                 }
               />
             ) : null}
-            <IconButton
-              onClick={onOpenAuth}
-              title={
-                hasAuthedProviders
-                  ? "管理模型账号授权"
-                  : "配置模型账号授权"
-              }
-              aria-label="模型账号授权"
-              icon={<KeyRound size={iconSizeMap.sm} />}
-            />
             <IconButton
               onClick={onOpenProviderSetup}
               title="模型接入向导"

@@ -293,6 +293,8 @@ export interface ChatMessage {
   timestamp?: number;
   /** SDK message 级别元信息；用于把模型名 / token 用量固定到具体 assistant 回复上 */
   meta?: ChatMessageMeta;
+  /** Client-side delivery state for optimistic user messages. */
+  delivery?: ChatMessageDelivery;
 }
 
 export interface ChatMessageUsage {
@@ -310,6 +312,12 @@ export interface ChatMessageMeta {
   api?: string;
   responseId?: string;
   usage?: ChatMessageUsage;
+}
+
+export interface ChatMessageDelivery {
+  status: "pending" | "sent" | "failed";
+  clientRequestId: string;
+  error?: string;
 }
 
 /** SDK getUserMessagesForForking() 返回的条目 */

@@ -20,6 +20,7 @@ import {
   LayoutDashboard,
   MessageSquare,
   Plus,
+  Square,
   Terminal,
   X,
 } from "lucide-react";
@@ -80,6 +81,7 @@ export interface WorkbenchSidebarProps {
   agentId: string | null;
   runtimeIdentity: RuntimeIdentity;
   progress: AgentProgress | null;
+  streaming: boolean;
   browserSnapshot: BrowserSnapshot;
   browserOpenRequest?: { id: number; url: string } | null;
   stats: StatsSnapshot | null;
@@ -93,6 +95,7 @@ export interface WorkbenchSidebarProps {
   filesLayout: FilesLayout;
   onSplitterMouseDown: MouseEventHandler<HTMLDivElement>;
   onOpenView: (view: WorkbenchView) => void;
+  onAbort?: () => Promise<void> | void;
   onPickPath: (absPath: string) => void;
   onFilesLayoutChange: Dispatch<SetStateAction<FilesLayout>>;
   onOpenProgressUrl?: (url: string) => void;
@@ -108,6 +111,7 @@ export function WorkbenchSidebar({
   agentId,
   runtimeIdentity,
   progress,
+  streaming,
   browserSnapshot,
   browserOpenRequest,
   stats,
@@ -121,6 +125,7 @@ export function WorkbenchSidebar({
   filesLayout,
   onSplitterMouseDown,
   onOpenView,
+  onAbort,
   onPickPath,
   onFilesLayoutChange,
   onOpenProgressUrl,
@@ -323,6 +328,7 @@ export function WorkbenchSidebar({
           {activeTab.kind === "home" && (
             <OverviewPanel
               progress={progress}
+              streaming={streaming}
               browserSnapshot={browserSnapshot}
               cwd={cwd}
               stats={stats}
@@ -335,11 +341,17 @@ export function WorkbenchSidebar({
               pendingImageCount={pendingImageCount}
               recommendations={recommendations}
               onOpenView={openWorkbenchTab}
+              onAbort={onAbort}
               onOpenTerminal={() => openLocalTab(terminalTab())}
             />
           )}
           {activeTab.kind === "progress" && (
-            <ProgressDetail progress={progress} onOpenUrl={onOpenProgressUrl} />
+            <ProgressDetail
+              progress={progress}
+              streaming={streaming}
+              onAbort={onAbort}
+              onOpenUrl={onOpenProgressUrl}
+            />
           )}
           {activeTab.kind === "outputs" && (
             <OutputsDetail
@@ -817,6 +829,7 @@ function SidechatPlaceholder() {
 
 function OverviewPanel({
   progress,
+  streaming,
   browserSnapshot,
   cwd,
   stats,
@@ -829,9 +842,11 @@ function OverviewPanel({
   pendingImageCount,
   recommendations,
   onOpenView,
+  onAbort,
   onOpenTerminal,
 }: {
   progress: AgentProgress | null;
+  streaming: boolean;
   browserSnapshot: BrowserSnapshot;
   cwd: string;
   stats: StatsSnapshot | null;
@@ -844,6 +859,7 @@ function OverviewPanel({
   pendingImageCount: number;
   recommendations: WorkbenchRecommendation[];
   onOpenView: (view: WorkbenchView) => void;
+  onAbort?: () => Promise<void> | void;
   onOpenTerminal: () => void;
 }) {
   const progressSummary = summarizeProgress(progress);
@@ -874,6 +890,7 @@ function OverviewPanel({
     context: hasContextContent,
     browser: hasBrowserContent,
   });
+  const progressOpen = expanded.progress || hasProgressContent || streaming;
   const toggle = (id: string) => {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
   };
@@ -901,7 +918,7 @@ function OverviewPanel({
         icon={<Clock size={13} />}
         title="进度"
         summary={progressSummary.badge ?? "idle"}
-        open={expanded.progress}
+        open={progressOpen}
         onToggle={() => toggle("progress")}
         actionLabel="详情"
         onAction={() => onOpenView({ type: "progress" })}
@@ -911,6 +928,9 @@ function OverviewPanel({
           secondary={progressSummary.secondary}
           tone={progressSummary.tone}
         />
+        {streaming && onAbort ? (
+          <AbortTaskButton testId="workbench-progress-stop" onAbort={onAbort} />
+        ) : null}
         {progressSteps.length > 0 ? (
           <div className="divide-y" style={{ borderColor: "var(--border-soft)" }}>
             {progressSteps.slice(0, 4).map((step) => (
@@ -1174,9 +1194,13 @@ function OverviewArtifactButton({
 
 function ProgressDetail({
   progress,
+  streaming,
+  onAbort,
   onOpenUrl,
 }: {
   progress: AgentProgress | null;
+  streaming: boolean;
+  onAbort?: () => Promise<void> | void;
   onOpenUrl?: (url: string) => void;
 }) {
   const groups = progress?.groups ?? [];
@@ -1184,11 +1208,47 @@ function ProgressDetail({
   const artifacts = progress?.artifacts ?? [];
   return (
     <div className="p-2.5" data-testid="workbench-progress-detail">
+      {streaming && onAbort ? (
+        <div className="mb-2 flex justify-end">
+          <AbortTaskButton
+            testId="workbench-progress-stop-detail"
+            onAbort={onAbort}
+          />
+        </div>
+      ) : null}
       <ProgressPopover progress={progress} onOpenUrl={onOpenUrl} />
       {!progress || (groups.length === 0 && steps.length === 0 && artifacts.length === 0) ? (
         <EmptyDetail title="暂无进度" body="agent 调用 update_progress 后，当前任务进度会显示在这里。" />
       ) : null}
     </div>
+  );
+}
+
+function AbortTaskButton({
+  testId,
+  onAbort,
+}: {
+  testId: string;
+  onAbort: () => Promise<void> | void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      onClick={(event) => {
+        event.stopPropagation();
+        void onAbort();
+      }}
+      className="inline-flex h-7 items-center gap-1.5 rounded border px-2 text-token-xs font-medium transition-colors hover:bg-[color:var(--bg-hover)]"
+      style={{
+        borderColor: "var(--color-danger)",
+        color: "var(--color-danger)",
+      }}
+      title="终止当前任务"
+    >
+      <Square size={12} />
+      <span>终止任务</span>
+    </button>
   );
 }
 

@@ -18,7 +18,7 @@ async function activeAgentId(page: import("@playwright/test").Page): Promise<str
 test("workbench: Overview 作为右侧 root 并支持折叠分组", async ({
   bootedPage: page,
 }) => {
-  await expect(page.getByRole("button", { name: "Explorer" })).toHaveAttribute(
+  await expect(page.getByRole("button", { name: "展开文件夹" })).toHaveAttribute(
     "aria-expanded",
     "false"
   );
@@ -70,6 +70,26 @@ test("workbench: Overview 作为右侧 root 并支持折叠分组", async ({
 
   await page.getByRole("button", { name: "New chat" }).click();
   await expect(page.getByTestId("workbench-overview")).toBeVisible();
+});
+
+test("workbench: 运行中的任务即使未上报进度也显示状态和终止入口", async ({
+  bootedPage: page,
+}) => {
+  await page.locator("textarea").first().fill("run a long task");
+  await page.getByTitle("Send", { exact: true }).click();
+  const agentId = await activeAgentId(page);
+
+  await pushSseEvent(page, agentId, { type: "agent_start" }, "run-start");
+
+  await expect(page.getByTestId("composer-stop-task")).toBeVisible();
+  await page.getByLabel("Workbench 面板").click();
+  await expect(page.getByTestId("workbench-section-progress")).toContainText(
+    "等待模型响应"
+  );
+  await expect(page.getByTestId("workbench-progress-stop")).toBeVisible();
+
+  await page.getByTestId("workbench-progress-stop").click();
+  await expect(page.getByTestId("workbench-progress-stop")).toBeHidden();
 });
 
 test("workbench: Outputs 作为产物 inbox 展示 URL 和文件动作", async ({
@@ -190,14 +210,14 @@ test("workbench: Tab OS 支持创建菜单、推荐项和本地 URL 过滤", asy
   await expect(page.getByTestId("workbench-home-launcher")).toBeVisible();
   await expect(page.getByTestId("workbench-launch-文件")).toBeVisible();
   await expect(page.getByTestId("workbench-launch-浏览器")).toBeVisible();
-  await expect(page.getByTestId("workbench-launch-终端")).toBeVisible();
+  await expect(page.getByTestId("workbench-launch-命令参考")).toBeVisible();
   await expect(page.getByTestId("workbench-launch-概览")).toBeVisible();
 
   await page.getByTestId("workbench-create-tab").click();
   await expect(page.getByTestId("workbench-create-menu")).toBeVisible();
   await expect(page.getByTestId("workbench-create-文件")).toBeVisible();
   await expect(page.getByTestId("workbench-create-浏览器")).toBeVisible();
-  await expect(page.getByTestId("workbench-create-终端")).toBeVisible();
+  await expect(page.getByTestId("workbench-create-命令参考")).toBeVisible();
 
   await page.getByTestId("workbench-create-浏览器").click();
   await expect(page.getByTestId("workbench-browser-launcher")).toBeVisible();

@@ -9,7 +9,7 @@
  *   2. 图片附件预览 + ✕ 移除
  *   3. 文件 chip 预览 + ✕ 移除
  *   4. 卡片：textarea + InputAutocomplete 浮层 + 隐藏 file input
- *      右下：streaming 时 [Steer | Follow-up | Abort]；空闲时 [Send]
+ *      右下：运行时 [Steer | Follow-up | 终止]；空闲时 [发送]
  *   5. 控制条：[+图片] [Provider] [Model] [Thinking] [Tools] [Compact] [🔊]
  *
  * 设计要点：
@@ -526,7 +526,7 @@ export function Composer(props: ComposerProps) {
               streaming
                 ? "Steer 补充当前任务 / Follow-up 排队下一步…"
                 : abortable
-                  ? "当前任务仍在执行，可点击 Stop 停止…"
+                  ? "当前任务仍在执行，可点击终止停止…"
                   : "Message…把要做的事说清楚，Shaula 会按步骤执行"
             }
             rows={4}
@@ -555,9 +555,9 @@ export function Composer(props: ComposerProps) {
               e.target.value = "";
             }}
           />
-          {/* 卡片底部内嵌：右下 Send */}
+          {/* 卡片底部内嵌：右下发送动作，运行中把终止放在发送动作后面 */}
           <div className="absolute bottom-3 right-3 flex items-center gap-2">
-            {abortable ? (
+            {abortable && streaming ? (
               <>
                 <button
                   type="button"
@@ -583,16 +583,24 @@ export function Composer(props: ComposerProps) {
                   <CornerDownLeft size={15} />
                   排队继续
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void handleAbort()}
-                  className="inline-flex h-[var(--control-sm)] w-[var(--control-sm)] items-center justify-center rounded-[var(--button-radius)] bg-[color:var(--color-danger)] text-[color:var(--color-bg)] hover:opacity-90"
-                  title="中止当前 turn"
-                  aria-label="Stop"
-                >
-                  <span className="block h-2.5 w-2.5 rounded-sm bg-[color:var(--color-bg)]" />
-                </button>
               </>
+            ) : null}
+            {abortable ? (
+              <button
+                type="button"
+                data-testid="composer-stop-task"
+                onClick={() => void handleAbort()}
+                className="inline-flex h-[var(--control-lg)] items-center gap-2 rounded-[var(--button-radius)] border px-3 text-token-ui font-semibold transition-colors hover:bg-[color:var(--color-danger-bg)]"
+                style={{
+                  borderColor: "var(--color-danger)",
+                  color: "var(--color-danger)",
+                }}
+                title="终止当前任务"
+                aria-label="终止任务"
+              >
+                <span className="block h-2.5 w-2.5 rounded-sm bg-[color:var(--color-danger)]" />
+                <span>终止</span>
+              </button>
             ) : (
               <button
                 onClick={() => void handleSend()}

@@ -94,6 +94,7 @@ export interface RunnerState {
   sessionFile: string | null;
 
   // 对话内容
+  sessionLoading: boolean;
   chatState: ReducerState;
   forkableUserMessages: ForkableUserMessage[];
   forkingIndex: number | null;
@@ -149,6 +150,7 @@ export function emptyRunner(): RunnerState {
     agentSessionId: null,
     sessionFile: null,
 
+    sessionLoading: false,
     chatState: createInitialState(),
     forkableUserMessages: [],
     forkingIndex: null,

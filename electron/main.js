@@ -938,12 +938,12 @@ async function createWindow() {
   }
   mainWin = new BrowserWindow({
     width: 1280,
-    height: 800,
-    // 实测算法:sidebar 260 + main 360(min) + splitter 4 + files 200(min) ≈ 824
-    // 给个边距,880 保证组件不重叠
-    minWidth: 880,
-    minHeight: 600,
+    height: 840,
+    // Workbench baseline: sidebar + chat + optional right panel should remain usable.
+    minWidth: 960,
+    minHeight: 680,
     title: "Shaula Agent",
+    show: false,
     webPreferences: {
       // 渲染进程就是 Next 的页面，sandbox 模式下走 preload 安全暴露 IPC
       contextIsolation: true,
@@ -958,7 +958,7 @@ async function createWindow() {
       // 仅启用标签能力，是否真正使用由前端实验开关控制，不影响现有 screencast 路径。
       webviewTag: true,
     },
-    backgroundColor: "#0a0a0a",
+    backgroundColor: "#ffffff",
   });
 
   // 外链用系统浏览器打开，不要在 Electron 内导航

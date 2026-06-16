@@ -183,6 +183,28 @@ test("sidebar: session more menu opens actions and rename remains clickable", as
   await expect(page.locator('input[value="Session 1"]')).toBeVisible();
 });
 
+test("sidebar: new task appears immediately after creation", async ({
+  bootedPage: page,
+}) => {
+  await expect(page.getByText("新建项目", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "选择或新建项目文件夹" })
+  ).toBeVisible();
+  await expect(page.getByText("当前项目", { exact: true })).toBeVisible();
+  await expect(page.getByText("当前项目:")).not.toBeVisible();
+  await expect(page.getByText("模型与接入")).toBeVisible();
+  await expect(page.getByText("授权", { exact: true })).not.toBeVisible();
+
+  await newChatBtn(page).click();
+  await expect(page.getByText("e2e-cwd", { exact: true })).toBeVisible();
+  await expect(page.getByText("Session 1")).toBeVisible();
+  await page.getByRole("button", { name: /折叠项目 e2e-cwd/ }).click();
+  await expect(page.getByText("Session 1")).toBeHidden();
+  await page.getByRole("button", { name: /展开项目 e2e-cwd/ }).click();
+  await expect(page.getByText("Session 1")).toBeVisible();
+  expect(await activeKey(page)).not.toBe("draft");
+});
+
 // ---------- 场景 1 ----------
 test("场景 1: A 流式中切到 B,B 输入框可以独立打字", async ({
   bootedPage: page,
@@ -320,22 +342,29 @@ test("场景 3: B 流完成,切回 B 看到完整内容", async ({ bootedPage: p
 });
 
 // ---------- 场景 4 ----------
-test("场景 4: 草稿输入框切走再切回仍保留", async ({ bootedPage: page }) => {
+test("场景 4: 新建任务立即成为真实 session, 不停留在 draft", async ({ bootedPage: page }) => {
   // 起一个 session A
-  const { aid: aidA } = await startSessionWith(page, "A 1st prompt");
+  const { aid: aidA, key: keyA } = await startSessionWith(page, "A 1st prompt");
   await pushAssistantStart(page, aidA, 1);
 
-  // +New 进草稿,在草稿打半句话
+  // +New 会 eager create 一个真实 session, 这样左侧栏和当前对话不会消失。
   await newChatBtn(page).click();
+  await page.waitForFunction(() => {
+    const w = window as unknown as {
+      __chatAppDiag?: { activeKey: () => string };
+    };
+    return w.__chatAppDiag!.activeKey() !== "draft";
+  });
+  expect(await activeKey(page)).not.toBe("draft");
+
+  // 新 session 的输入框仍可独立编辑。
   await editor(page).fill("半句话 in draft");
-  expect(await activeKey(page)).toBe("draft");
 
   // Composer 输入为性能先保存在本地受控 state；用户可见值是这里的
   // 权威验收点，发送/切换时才会 flush 到 input store。
   await expect(editor(page)).toHaveValue("半句话 in draft");
 
   // 验证 A runner 的 input 是空(send 后清掉)
-  const keyA = (await runnerKeys(page)).find((k) => k !== "draft")!;
   const aInput = await page.evaluate((k) => {
     const w = window as unknown as {
       __chatAppDiag?: {

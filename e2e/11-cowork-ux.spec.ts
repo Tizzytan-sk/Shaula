@@ -42,7 +42,8 @@ base("cowork ux: composer explains why send is blocked", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
   await page.getByRole("button", { name: "配置模型" }).click();
   await expect(page.getByText("开始使用 Shaula Agent")).toBeVisible();
-  await expect(page.getByText("本地 / 自定义端点")).toBeVisible();
+  await expect(page.getByText("选择模型接入")).toBeVisible();
+  await expect(page.getByText("OpenAI 兼容网关")).toBeVisible();
 });
 
 async function activeAgentId(page: import("@playwright/test").Page): Promise<string> {

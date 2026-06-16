@@ -5,11 +5,11 @@
  * RFC-1 阶段 C6：从 ChatApp.tsx 抽出，纯展示+受控组件。
  *
  * 结构：
- *   1. 头：BrandLogo + "Shaula" 标题 + New chat 按钮
- *   2. cwd 显示条（点击切换工作目录）
+ *   1. 头：BrandLogo + "Shaula" 标题 + 新建任务 + 当前项目选择
+ *   2. 搜索
  *   3. sessions 列表（含 renderRow：父/子嵌套、状态点、⋯ 菜单、内联删除确认）
- *   4. EXPLORER 文件树（SidebarExplorer 包装）
- *   5. 底部：模型 / 授权 / Settings 入口
+ *   4. 文件夹树（SidebarExplorer 包装）
+ *   5. 底部：模型与接入 / Settings 入口
  *
  * 设计要点：
  *   - 纯受控：所有 state / setter / action 走 props
@@ -18,7 +18,7 @@
  */
 
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { FloatingLayer } from "./FloatingLayer";
 import { Button, Menu, MenuItem } from "./DesignPrimitives";
 import {
@@ -27,8 +27,8 @@ import {
   Edit3,
   Ellipsis,
   ExternalLink,
+  Folder,
   GitBranch,
-  KeyRound,
   Moon,
   PanelLeft,
   Pin,
@@ -53,7 +53,7 @@ export interface SidebarProps {
 
   // ===== cwd =====
   cwd: string;
-  setShowCwdPicker: Dispatch<SetStateAction<boolean>>;
+  onOpenCwdPicker: () => void;
 
   // ===== quick actions =====
   theme: "light" | "dark";
@@ -65,7 +65,6 @@ export interface SidebarProps {
   // ===== action menu =====
   onSkipUpdateVersion?: () => void;
   onOpenProviderSetup: () => void;
-  onOpenAuth: () => void;
   onOpenSettings: () => void;
 
   // ===== sessions =====
@@ -129,6 +128,14 @@ function getHydratedClient(): boolean {
 }
 function getHydratedServer(): boolean {
   return false;
+}
+
+function projectNameFromPath(projectPath: string): string {
+  const normalized = projectPath.trim();
+  if (!normalized) return "未归档";
+  const trimmed = normalized.replace(/[\\/]+$/, "");
+  const name = trimmed.split(/[\\/]/).filter(Boolean).pop();
+  return name || normalized;
 }
 
 function SidebarActionMenuItem({
@@ -195,7 +202,7 @@ export function Sidebar(props: SidebarProps) {
     sidebarOpen,
     onToggleSidebar,
     cwd,
-    setShowCwdPicker,
+    onOpenCwdPicker,
     theme,
     onToggleTheme,
     updateAvailable,
@@ -203,7 +210,6 @@ export function Sidebar(props: SidebarProps) {
     onDownloadUpdate,
     onSkipUpdateVersion,
     onOpenProviderSetup,
-    onOpenAuth,
     onOpenSettings,
     sessions,
     groupedSessions,
@@ -246,6 +252,9 @@ export function Sidebar(props: SidebarProps) {
   const [expandedParents, setExpandedParents] = useState<Set<string>>(
     () => new Set()
   );
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(
+    () => new Set()
+  );
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const actionMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
 
@@ -264,6 +273,28 @@ export function Sidebar(props: SidebarProps) {
     ? sessions.find((session) => session.id === selectedId)
     : null;
   const selectedParentPath = selectedSession?.parentSessionPath;
+  const projectGroups = useMemo(() => {
+    const order: string[] = [];
+    const byCwd = new Map<string, SessionInfoLite[]>();
+    const addProject = (projectPath: string) => {
+      const key = projectPath || "";
+      if (!byCwd.has(key)) {
+        byCwd.set(key, []);
+        order.push(key);
+      }
+    };
+    addProject(cwd);
+    for (const session of groupedSessions.parents) {
+      const key = session.cwd || "";
+      addProject(key);
+      byCwd.get(key)?.push(session);
+    }
+    return order.map((projectPath) => ({
+      projectPath,
+      name: projectNameFromPath(projectPath),
+      sessions: byCwd.get(projectPath) ?? [],
+    }));
+  }, [cwd, groupedSessions.parents]);
   const hasMaintenanceActions = Boolean(
     updateAvailable && (onDownloadUpdate || onSkipUpdateVersion)
   );
@@ -273,6 +304,15 @@ export function Sidebar(props: SidebarProps) {
       const next = new Set(cur);
       if (next.has(parentPath)) next.delete(parentPath);
       else next.add(parentPath);
+      return next;
+    });
+  };
+
+  const toggleProjectCollapsed = (projectPath: string) => {
+    setCollapsedProjects((cur) => {
+      const next = new Set(cur);
+      if (next.has(projectPath)) next.delete(projectPath);
+      else next.add(projectPath);
       return next;
     });
   };
@@ -375,34 +415,46 @@ export function Sidebar(props: SidebarProps) {
             </button>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={startNewSession}
-          aria-label="New chat"
-          className="w-full inline-flex h-[var(--control-lg)] items-center justify-center gap-2 rounded-[var(--button-radius)] text-token-ui font-semibold transition-colors"
-          style={{
-            background: "var(--bg-hover)",
-            color: "var(--text)",
-          }}
-        >
-          <Plus size={17} />
-          <span>新建任务</span>
-        </button>
+        <div className="space-y-1">
+          <button
+            type="button"
+            onClick={startNewSession}
+            aria-label="New chat"
+            className="w-full inline-flex h-[var(--control-md)] items-center justify-start gap-2 rounded-[var(--button-radius)] px-2 text-token-sm font-medium transition-colors hover:bg-[color:var(--bg-hover)]"
+            style={{ color: "var(--text)" }}
+          >
+            <Plus size={16} />
+            <span>新建任务</span>
+          </button>
+          <button
+            type="button"
+            onClick={onOpenCwdPicker}
+            aria-label="选择或新建项目文件夹"
+            className="group/project w-full rounded-[var(--button-radius)] border px-2.5 py-2 text-left transition-colors hover:bg-[color:var(--bg-hover)]"
+            style={{
+              borderColor: "var(--border)",
+              background: "var(--bg-app)",
+              color: "var(--text)",
+            }}
+            title={`${cwd}\n点击切换项目文件夹`}
+          >
+            <span className="flex items-center gap-2">
+              <Folder size={15} className="shrink-0 text-[color:var(--accent)]" />
+              <span className="min-w-0 flex-1">
+                <span className="block text-token-xs font-medium text-[color:var(--text-muted)]">
+                  当前项目
+                </span>
+                <span className="block truncate font-mono text-token-xs">
+                  {shortCwd(cwd) || "~"}
+                </span>
+              </span>
+              <span className="shrink-0 rounded px-1.5 py-0.5 text-token-xs font-medium text-[color:var(--accent)] group-hover/project:bg-[color:var(--bg-selected)]">
+                切换/新建
+              </span>
+            </span>
+          </button>
+        </div>
       </div>
-      {/* cwd 显示（点击切换） */}
-      <button
-        type="button"
-        onClick={() => setShowCwdPicker(true)}
-        className="w-full px-2.5 py-2 border-b text-token-xs truncate font-mono text-left transition-colors hover:bg-[color:var(--bg-hover)]"
-        style={{
-          borderColor: "var(--border)",
-          color: "var(--text-muted)",
-          background: "transparent",
-        }}
-        title={`${cwd}\n点击切换工作目录`}
-      >
-        {shortCwd(cwd) || "~"}
-      </button>
       {/* 搜索框（RFC-3 Phase B / F2） */}
       {searchEnabled && (
         <div
@@ -774,15 +826,64 @@ export function Sidebar(props: SidebarProps) {
             );
           };
           const out: React.ReactNode[] = [];
-          for (const p of groupedSessions.parents) {
-            const kids = groupedSessions.childrenByParent.get(p.path);
-            const childCount = kids?.length ?? 0;
-            out.push(renderRow(p, 0, childCount));
-            const expanded =
-              childCount > 0 &&
-              (expandedParents.has(p.path) || selectedParentPath === p.path);
-            if (kids && expanded) {
-              for (const c of kids) out.push(renderRow(c, 1));
+          for (const project of projectGroups) {
+            const projectKey = project.projectPath || "unassigned";
+            const projectCollapsed = collapsedProjects.has(projectKey);
+            out.push(
+              <button
+                key={`project:${projectKey}`}
+                type="button"
+                onClick={() => toggleProjectCollapsed(projectKey)}
+                className="flex w-full min-w-0 items-center gap-1.5 border-b px-2.5 py-2 text-left text-token-xs font-semibold text-[color:var(--text-muted)] transition-colors hover:bg-[color:var(--bg-hover)]"
+                style={{ borderColor: "var(--border-soft)" }}
+                aria-expanded={!projectCollapsed}
+                aria-label={
+                  projectCollapsed
+                    ? `展开项目 ${project.name}`
+                    : `折叠项目 ${project.name}`
+                }
+                title={
+                  projectCollapsed
+                    ? `展开项目 ${project.name}`
+                    : `折叠项目 ${project.name}`
+                }
+              >
+                <ChevronRight
+                  size={13}
+                  className="shrink-0 transition-transform"
+                  style={{
+                    transform: projectCollapsed ? "rotate(0deg)" : "rotate(90deg)",
+                  }}
+                />
+                <Folder size={13} className="shrink-0" />
+                <span className="truncate normal-case">{project.name}</span>
+                <span className="ml-auto shrink-0 font-normal text-[color:var(--text-dim)]">
+                  {project.sessions.length}
+                </span>
+              </button>
+            );
+            if (projectCollapsed) continue;
+            if (project.sessions.length === 0) {
+              out.push(
+                <div
+                  key={`project-empty:${project.projectPath || "unassigned"}`}
+                  className="border-b px-5 py-2 text-token-xs text-[color:var(--text-dim)]"
+                  style={{ borderColor: "var(--border-soft)" }}
+                >
+                  当前项目还没有任务
+                </div>
+              );
+            }
+            for (const p of project.sessions) {
+              const kids = groupedSessions.childrenByParent.get(p.path);
+              const childCount = kids?.length ?? 0;
+              out.push(renderRow(p, 0, childCount));
+              const expanded =
+                childCount > 0 &&
+                (expandedParents.has(p.path) || selectedParentPath === p.path);
+              if (kids && expanded) {
+                for (const c of kids) out.push(renderRow(c, 1));
+              }
             }
           }
           return out;
@@ -818,22 +919,12 @@ export function Sidebar(props: SidebarProps) {
         <button
           type="button"
           onClick={onOpenProviderSetup}
-          title="配置模型"
+          title="配置模型与接入"
           className="inline-flex flex-1 flex-row items-center justify-center gap-2 text-token-sm font-medium hover:bg-[color:var(--bg-hover)]"
           style={{ color: "var(--text)" }}
         >
           <Sparkles size={16} />
-          <span>模型</span>
-        </button>
-        <button
-          type="button"
-          onClick={onOpenAuth}
-          title="账号授权"
-          className="inline-flex flex-1 flex-row items-center justify-center gap-2 text-token-sm font-medium hover:bg-[color:var(--bg-hover)]"
-          style={{ color: "var(--text)" }}
-        >
-          <KeyRound size={16} />
-          <span>授权</span>
+          <span>模型与接入</span>
         </button>
         <button
           type="button"

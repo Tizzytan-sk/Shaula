@@ -337,6 +337,119 @@ function assistantIndexInCurrentTurn(
   return -1;
 }
 
+function textFromUserEvent(m: NonNullable<AnyEvent["message"]>): {
+  parts: MessagePart[];
+  text: string;
+} {
+  const parts: MessagePart[] = [];
+  let textJoined = "";
+  for (const c of m.content ?? []) {
+    if (c.type === "text" && c.text) {
+      const visible = stripContextAside(c.text);
+      if (visible) {
+        parts.push({ kind: "text", text: visible });
+        textJoined += visible;
+      }
+    } else if (c.type === "image" && c.data && c.mimeType) {
+      parts.push({ kind: "image", data: c.data, mimeType: c.mimeType });
+    }
+  }
+  return { parts, text: textJoined };
+}
+
+function sameUserParts(left: MessagePart[] | undefined, right: MessagePart[]): boolean {
+  const a = left ?? [];
+  if (a.length !== right.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const l = a[i];
+    const r = right[i];
+    if (l.kind !== r.kind) return false;
+    if (l.kind === "text" && r.kind === "text" && l.text !== r.text) {
+      return false;
+    }
+    if (
+      l.kind === "image" &&
+      r.kind === "image" &&
+      (l.data !== r.data || l.mimeType !== r.mimeType)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function optimisticUserIndex(messages: ChatMessage[], parts: MessagePart[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role === "assistant") return -1;
+    if (message.role !== "user") continue;
+    if (!message.delivery?.clientRequestId) continue;
+    return sameUserParts(message.parts, parts) ? i : -1;
+  }
+  return -1;
+}
+
+export function appendOptimisticUserMessage(
+  prev: ReducerState,
+  input: {
+    text: string;
+    images?: Array<{ data: string; mimeType: string }>;
+    clientRequestId: string;
+    timestamp?: number;
+  }
+): ReducerState {
+  const text = input.text || (input.images?.length ? "(image)" : "");
+  const parts: MessagePart[] = [];
+  if (text) parts.push({ kind: "text", text });
+  for (const image of input.images ?? []) {
+    parts.push({ kind: "image", data: image.data, mimeType: image.mimeType });
+  }
+  return {
+    ...prev,
+    messages: [
+      ...prev.messages,
+      {
+        role: "user",
+        parts,
+        text,
+        timestamp: input.timestamp ?? Date.now(),
+        delivery: {
+          status: "pending",
+          clientRequestId: input.clientRequestId,
+        },
+      },
+    ],
+  };
+}
+
+export function markOptimisticUserMessage(
+  prev: ReducerState,
+  clientRequestId: string,
+  result: { status: "sent" } | { status: "failed"; error: string }
+): ReducerState {
+  const idx = prev.messages.findIndex(
+    (message) => message.delivery?.clientRequestId === clientRequestId
+  );
+  if (idx < 0) return prev;
+  const messages = prev.messages.slice();
+  const current = messages[idx];
+  messages[idx] = {
+    ...current,
+    delivery:
+      result.status === "failed"
+        ? {
+            clientRequestId,
+            status: "failed",
+            error: result.error,
+          }
+        : {
+            clientRequestId,
+            status: "sent",
+          },
+  };
+  return { ...prev, messages };
+}
+
 /** thinking 段已经"翻篇"——出现 text 或 tool 时调用，给最后一个未结束的 thinking 打 endedAt */
 function sealLastThinkingIfOpen(parts: MessagePart[]) {
   for (let i = parts.length - 1; i >= 0; i--) {
@@ -718,27 +831,22 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
       const m = ev.message;
       if (!m) return state;
       if (m.role === "user") {
-        // 把 user message 拼成 parts（text + image 按顺序）。
-        // text 部分要剥离「上下文 aside」标记，确保气泡只显示用户原话。
-        const parts: MessagePart[] = [];
-        let textJoined = "";
-        for (const c of m.content ?? []) {
-          if (c.type === "text" && c.text) {
-            const visible = stripContextAside(c.text);
-            if (visible) {
-              parts.push({ kind: "text", text: visible });
-              textJoined += visible;
-            }
-          } else if (c.type === "image" && c.data && c.mimeType) {
-            parts.push({ kind: "image", data: c.data, mimeType: c.mimeType });
-          }
-        }
-        state.messages.push({
+        const { parts, text } = textFromUserEvent(m);
+        const optimisticIdx = optimisticUserIndex(state.messages, parts);
+        const nextMessage: ChatMessage = {
           role: "user",
           parts,
-          text: textJoined, // 兼容老字段
+          text, // 兼容老字段
           timestamp: m.timestamp,
-        });
+        };
+        if (optimisticIdx >= 0) {
+          state.messages[optimisticIdx] = {
+            ...nextMessage,
+            timestamp: m.timestamp ?? state.messages[optimisticIdx].timestamp,
+          };
+        } else {
+          state.messages.push(nextMessage);
+        }
         // user message 不算 active assistant
       } else if (m.role === "assistant") {
         const parts = partsFromContent(m.content);

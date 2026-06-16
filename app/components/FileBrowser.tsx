@@ -25,9 +25,9 @@ interface Props {
   /** 外部指定要立即打开的文件绝对路径。 */
   initialFile?: string;
   onClose: () => void;
-  /** 若提供，文件/目录条目会显示一个 ↪ 按钮，点击后把绝对路径传给回调（用于"插入到对话"） */
+  /** 若提供，文件条目会显示一个 ↪ 按钮，底部也可引用当前目录（用于"插入到对话"） */
   onPickPath?: (absPath: string) => void;
-  /** 若提供，顶栏会显示"用此目录"按钮，点击后把当前 root 传出（用于切换 cwd） */
+  /** 若提供，底部会显示"选择当前文件夹"按钮，点击后把当前 root 传出（用于切换 cwd） */
   onPickDir?: (absPath: string) => void;
   /** 当 tree/viewer 折叠状态变化时通知外层,以便外层容器同步收缩宽度 */
   onLayoutChange?: (state: {
@@ -265,24 +265,6 @@ function DirNode({
             ↻
           </button>
         )}
-        {onPickPath && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onPickPath(path);
-            }}
-            className="shrink-0 inline-flex min-h-[24px] items-center gap-1 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
-            style={{
-              borderColor: "var(--border)",
-              color: "var(--fg-muted)",
-            }}
-            title={`选择文件夹: ${path}`}
-          >
-            <CornerDownRight size={11} />
-            <span>选文件夹</span>
-          </button>
-        )}
       </div>
       {open && (
         <div>
@@ -445,21 +427,6 @@ function SearchResultList({
               {h.path}
             </span>
           </button>
-          {h.isDir && onPick && (
-            <button
-              type="button"
-              onClick={() => onPick(h.path)}
-              className="shrink-0 inline-flex min-h-[24px] items-center gap-1 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
-              style={{
-                borderColor: "var(--border)",
-                color: "var(--fg-muted)",
-              }}
-              title={`选择文件夹: ${h.path}`}
-            >
-              <CornerDownRight size={11} />
-              <span>选文件夹</span>
-            </button>
-          )}
         </div>
       ))}
       {truncated && (
@@ -1393,17 +1360,6 @@ export default function FileBrowser({
           >
             ↻
           </button>
-          {onPickDir && (
-            <button
-              type="button"
-              onClick={() => onPickDir(root)}
-              className="px-2 py-0.5 rounded text-white"
-              style={{ background: "var(--accent)" }}
-              title={`使用此目录作为 cwd: ${root}`}
-            >
-              用此目录
-            </button>
-          )}
           <button
             type="button"
             onClick={onClose}
@@ -1513,6 +1469,42 @@ export default function FileBrowser({
             />
           )}
         </div>
+        {(onPickDir || onPickPath) && (
+          <div
+            className="border-t px-2 py-1.5"
+            style={{
+              borderColor: "var(--border-soft)",
+              background: "var(--bg-panel)",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                if (onPickDir) onPickDir(root);
+                else onPickPath?.(root);
+              }}
+              className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded border px-2 text-token-xs font-medium transition-colors hover:bg-[color:var(--bg-hover)]"
+              style={{
+                borderColor: "var(--border)",
+                color: "var(--fg)",
+              }}
+              title={
+                onPickDir
+                  ? `选择当前文件夹: ${root}`
+                  : `引用当前文件夹: ${root}`
+              }
+            >
+              <CornerDownRight size={12} />
+              <span>{onPickDir ? "选择当前文件夹" : "引用当前文件夹"}</span>
+              <span
+                className="min-w-0 max-w-[55%] truncate font-mono"
+                style={{ color: "var(--fg-muted)" }}
+              >
+                {basename(root) || root}
+              </span>
+            </button>
+          </div>
+        )}
       </div>
       )}
 
