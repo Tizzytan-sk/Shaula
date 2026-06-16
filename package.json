@@ -73,7 +73,8 @@
     "clean": "node scripts/clean.mjs",
     "electron:build": "npm run clean && npm run build:electron && node scripts/build-electron.mjs",
     "electron:build:mac": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --mac --arm64",
-    "electron:build:win": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --win nsis --x64"
+    "electron:build:win": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --win nsis --x64",
+    "electron:build:win:unsigned": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --win nsis --x64 --config.win.signAndEditExecutable=false"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.78.0",

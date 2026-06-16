@@ -136,10 +136,16 @@ npm run electron:build:mac
 
 # Windows x64 NSIS installer
 npm run electron:build:win
+
+# Windows x64 local fallback when winCodeSign extraction cannot create symlinks
+npm run electron:build:win:unsigned
 ```
 
 Unsigned Windows builds can trigger Microsoft Defender SmartScreen. For public
 distribution, build in GitHub Actions and add Windows code signing when ready.
+If local Windows builds fail while extracting `winCodeSign` with a symlink
+privilege error, enable Windows Developer Mode / run an elevated shell, or use
+the unsigned fallback above for local validation.
 
 Desktop installer artifacts are built and uploaded through:
 
