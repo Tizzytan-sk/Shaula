@@ -82,10 +82,12 @@ export async function installApiFixtures(
         parentSessionId?: string | null;
       }>;
       __mockAgentCounter: number;
+      __mockOmitNewSessionRows: boolean;
       __E2E__: boolean;
     };
     w.__mockSessions = [];
     w.__mockAgentCounter = 0;
+    w.__mockOmitNewSessionRows = false;
     w.__E2E__ = true; // 让 ChatApp 挂诊断钩子到 window.__chatAppDiag
   });
 
@@ -321,19 +323,22 @@ export async function installApiFixtures(
             firstMessage: string;
             modified: string;
           }>;
+          __mockOmitNewSessionRows?: boolean;
         };
         w.__mockAgentCounter += 1;
         const c = w.__mockAgentCounter;
         const sessionId = `00000000-0000-0000-0000-${String(c).padStart(12, "0")}`;
         const sessionFile = `/tmp/e2e-sessions/${sessionId}.jsonl`;
-        w.__mockSessions.push({
-          id: sessionId,
-          path: sessionFile,
-          cwd: "/tmp/e2e-cwd",
-          name: `Session ${c}`,
-          firstMessage: `Session ${c}`,
-          modified: new Date().toISOString(),
-        });
+        if (!w.__mockOmitNewSessionRows) {
+          w.__mockSessions.push({
+            id: sessionId,
+            path: sessionFile,
+            cwd: "/tmp/e2e-cwd",
+            name: `Session ${c}`,
+            firstMessage: `Session ${c}`,
+            modified: new Date().toISOString(),
+          });
+        }
         return { id: `agent-${c}`, sessionId, sessionFile };
       });
       return route.fulfill({
@@ -387,6 +392,123 @@ export async function installApiFixtures(
             thinkingLevel: "medium",
             supportsThinking: true,
             availableThinkingLevels: ["low", "medium", "high"],
+            contract: null,
+            progress: { steps: [], groups: [], artifacts: [], updatedAt: Date.now() },
+          },
+        });
+      }
+      const body = JSON.parse(route.request().postData() ?? "{}") as {
+        type?: string;
+        action?: string;
+        text?: string;
+        objective?: string;
+      };
+      const action = body.type ?? body.action;
+      if (action === "prompt" || action === "goal_set") {
+        const objective = body.objective ?? body.text ?? "E2E task";
+        const contract = {
+          id: "contract-e2e",
+          objective,
+          scope: ["E2E fixture scope"],
+          nonGoals: ["No destructive external actions"],
+          acceptanceCriteria: [
+            {
+              id: "objective-met",
+              description: "The stated objective is completed.",
+              required: true,
+              evidenceRequired: ["diff"],
+            },
+          ],
+          requiredEvidence: ["diff", "test_result"],
+          rubricProfile: "coding.default",
+          profileSelection: {
+            source: "inferred",
+            selectedProfile: "coding.default",
+            inferredProfile: "coding.default",
+          },
+          allowedCapabilities: ["read_workspace", "edit_workspace"],
+          stopPolicy: { targetScore: 1, minDelta: 0, maxIterations: 3 },
+        };
+        const now = Date.now();
+        const progress = {
+          steps: [
+            {
+              id: "task-contract",
+              title: `确认任务契约：${objective}`,
+              status: "completed",
+              summary: "coding.default · evidence: diff, test_result",
+              completedAt: now,
+            },
+            {
+              id: "main-artifact",
+              title: "锁定主产物",
+              status: "running",
+              summary: "先确认用户最终应该打开或检查的文件、URL、页面或输出路径。",
+              startedAt: now,
+            },
+          ],
+          groups: [
+            {
+              id: "group-1",
+              index: 1,
+              steps: [
+                {
+                  id: "task-contract",
+                  title: `确认任务契约：${objective}`,
+                  status: "completed",
+                  summary: "coding.default · evidence: diff, test_result",
+                  completedAt: now,
+                },
+                {
+                  id: "main-artifact",
+                  title: "锁定主产物",
+                  status: "running",
+                  summary: "先确认用户最终应该打开或检查的文件、URL、页面或输出路径。",
+                  startedAt: now,
+                },
+              ],
+              startedAt: now,
+            },
+          ],
+          artifacts: [
+            {
+              id: "contract-contract-e2e",
+              kind: "other",
+              title: "任务契约",
+              summary: `${objective} · coding.default`,
+              requiredEvidence: ["diff", "test_result"],
+              contractCriterionId: "objective-met",
+              createdAt: now,
+            },
+          ],
+          updatedAt: now,
+        };
+        if (action === "goal_set") {
+          return route.fulfill({
+            json: {
+              ok: true,
+              goal: {
+                id: "goal-e2e",
+                objective,
+                status: "active",
+                createdAt: now,
+                updatedAt: now,
+                contractId: contract.id,
+              },
+              contract,
+              progress,
+            },
+          });
+        }
+        return route.fulfill({ json: { ok: true, contract, progress } });
+      }
+      if (action === "goal_clear") {
+        return route.fulfill({
+          json: {
+            ok: true,
+            goal: null,
+            contract: null,
+            progress: { steps: [], groups: [], artifacts: [], updatedAt: Date.now() },
           },
         });
       }

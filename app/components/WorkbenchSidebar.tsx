@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import type { BrowserAnnotation, BrowserSnapshot } from "@/lib/browser/types";
 import type { BudgetStatus } from "@/lib/budget/types";
+import type { ExecutionContractSummary } from "@/lib/execution-contract/types";
 import type { RuntimeIdentity } from "@/lib/runtime/identity";
 import type { StatsSnapshot } from "@/lib/session-runner";
 import type { AgentProgress, ProgressArtifact, ProgressGroup } from "@/lib/progress/types";
@@ -81,6 +82,7 @@ export interface WorkbenchSidebarProps {
   agentId: string | null;
   runtimeIdentity: RuntimeIdentity;
   progress: AgentProgress | null;
+  contract: ExecutionContractSummary | null;
   streaming: boolean;
   browserSnapshot: BrowserSnapshot;
   browserOpenRequest?: { id: number; url: string } | null;
@@ -111,6 +113,7 @@ export function WorkbenchSidebar({
   agentId,
   runtimeIdentity,
   progress,
+  contract,
   streaming,
   browserSnapshot,
   browserOpenRequest,
@@ -328,6 +331,7 @@ export function WorkbenchSidebar({
           {activeTab.kind === "home" && (
             <OverviewPanel
               progress={progress}
+              contract={contract}
               streaming={streaming}
               browserSnapshot={browserSnapshot}
               cwd={cwd}
@@ -582,15 +586,10 @@ function WorkbenchHomeLauncher({
   onOpenView: (view: WorkbenchView) => void;
   onOpenTerminal: () => void;
 }) {
-  // 响应式网格：跟随 workbench 面板自身宽度（容器查询）
-  //   默认 (窄):  1 列，动作名 + body 能完整显示
-  //   ≥ 360px:    2 列
-  //   ≥ 540px:    4 列一排
-  // auto-fit + minmax 会自动填满剩余列，不会出现“三个卡片全隶属一行”的丑状。
   const gridStyle: CSSProperties = {
     display: "grid",
-    gap: 8,
-    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+    gap: 6,
+    gridTemplateColumns: "repeat(auto-fit, minmax(92px, 1fr))",
   };
   return (
     <section className="w-full min-w-0 max-w-full space-y-2" data-testid="workbench-home-launcher">
@@ -656,34 +655,31 @@ function LauncherTile({
   body: string;
   onClick: () => void;
 }) {
-  // 原来固定 p-3 + 垂直堆叠，窄于 160px 时中文 body 只能剩两个字。
-  // 现在用 padding 稍紧 + 允许 body 换行到两行，使窄宽下可读。
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full min-w-0 max-w-full flex-col items-start gap-1 overflow-hidden rounded border p-2.5 text-left hover:bg-[color:var(--bg-hover)]"
-      style={{ borderColor: "var(--border-soft)", background: "var(--bg-panel-2)" }}
+      className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden rounded border px-2 py-2 text-left hover:bg-[color:var(--bg-hover)]"
+      style={{ borderColor: "var(--border-soft)", background: "var(--bg-app)" }}
       data-testid={`workbench-launch-${title}`}
     >
       <span
-        className="inline-flex h-7 w-7 items-center justify-center rounded"
+        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded"
         style={{ background: "var(--bg-selected)", color: "var(--accent)" }}
       >
         {icon}
       </span>
-      <span className="block w-full truncate text-xs font-medium">{title}</span>
-      <span
-        className="block w-full text-token-xs leading-snug"
-        style={{
-          color: "var(--text-muted)",
-          display: "-webkit-box",
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: "vertical",
-          overflow: "hidden",
-        }}
-      >
-        {body}
+      <span className="min-w-0 flex-1">
+        <span className="block w-full truncate text-token-xs font-medium">
+          {title}
+        </span>
+        <span
+          className="block w-full truncate text-token-xs"
+          style={{ color: "var(--text-muted)" }}
+          title={body}
+        >
+          {body}
+        </span>
       </span>
     </button>
   );
@@ -829,6 +825,7 @@ function SidechatPlaceholder() {
 
 function OverviewPanel({
   progress,
+  contract,
   streaming,
   browserSnapshot,
   cwd,
@@ -846,6 +843,7 @@ function OverviewPanel({
   onOpenTerminal,
 }: {
   progress: AgentProgress | null;
+  contract: ExecutionContractSummary | null;
   streaming: boolean;
   browserSnapshot: BrowserSnapshot;
   cwd: string;
@@ -871,6 +869,7 @@ function OverviewPanel({
   const browserAnnotations = browserSnapshot.annotations ?? [];
   const progressGroups = normalizedGroups(progress);
   const progressSteps = progressGroups.at(-1)?.steps ?? [];
+  const progressCockpit = summarizeProgressCockpit(progress, contract, streaming);
   const browserStatus = describeBrowserStatus(browserSnapshot);
   const hasProgressContent = progressSteps.length > 0;
   const hasOutputContent = artifacts.length > 0;
@@ -907,6 +906,14 @@ function OverviewPanel({
       }}
       data-testid="workbench-overview"
     >
+      <TaskCockpitCard
+        summary={progressCockpit}
+        browserStatus={browserStatus.short}
+        streaming={streaming}
+        onAbort={onAbort}
+        onOpenProgress={() => onOpenView({ type: "progress" })}
+      />
+
       <WorkbenchHomeLauncher
         recommendations={recommendations}
         onOpenView={onOpenView}
@@ -928,9 +935,6 @@ function OverviewPanel({
           secondary={progressSummary.secondary}
           tone={progressSummary.tone}
         />
-        {streaming && onAbort ? (
-          <AbortTaskButton testId="workbench-progress-stop" onAbort={onAbort} />
-        ) : null}
         {progressSteps.length > 0 ? (
           <div className="divide-y" style={{ borderColor: "var(--border-soft)" }}>
             {progressSteps.slice(0, 4).map((step) => (
@@ -1028,6 +1032,207 @@ function OverviewPanel({
           tone={browserSnapshot.status === "error" ? "error" : browserSnapshot.status === "busy" ? "running" : undefined}
         />
       </OverviewSection>
+    </div>
+  );
+}
+
+function TaskCockpitCard({
+  summary,
+  browserStatus,
+  streaming,
+  onAbort,
+  onOpenProgress,
+}: {
+  summary: ProgressCockpitSummary;
+  browserStatus: string;
+  streaming: boolean;
+  onAbort?: () => Promise<void> | void;
+  onOpenProgress: () => void;
+}) {
+  const pctLabel = `${summary.percent}%`;
+  return (
+    <section
+      className="overflow-hidden rounded border"
+      style={{
+        borderColor: "var(--border)",
+        background: "linear-gradient(180deg, var(--bg-panel), var(--bg-app))",
+      }}
+      data-testid="workbench-task-cockpit"
+    >
+      <div className="space-y-3 p-3">
+        <div className="flex items-start gap-2">
+          <span
+            className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded"
+            style={{
+              background: summary.tone === "error" ? "var(--color-danger-bg)" : "var(--bg-selected)",
+              color: summary.tone === "error" ? "var(--color-danger)" : "var(--accent)",
+            }}
+          >
+            <Clock size={16} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <div
+                className="truncate text-token-xs font-medium uppercase tracking-wide"
+                style={{ color: "var(--text-muted)" }}
+              >
+                当前任务
+              </div>
+              <span
+                className="shrink-0 rounded px-1.5 py-0.5 text-token-xs"
+                style={{
+                  background:
+                    summary.tone === "running"
+                      ? "var(--color-warning-bg)"
+                      : summary.tone === "error"
+                        ? "var(--color-danger-bg)"
+                        : "var(--bg-selected)",
+                  color:
+                    summary.tone === "running"
+                      ? "var(--color-warning)"
+                      : summary.tone === "error"
+                        ? "var(--color-danger)"
+                        : "var(--text-muted)",
+                }}
+              >
+                {summary.statusLabel}
+              </span>
+              <span
+                className="min-w-0 truncate rounded px-1.5 py-0.5 text-token-xs"
+                style={{ background: "var(--bg-selected)", color: "var(--text-muted)" }}
+                title={`任务契约：${summary.contractLabel}`}
+              >
+                {summary.contractLabel}
+              </span>
+            </div>
+            <div
+              className="mt-1 line-clamp-2 text-sm font-semibold leading-snug"
+              style={{ color: "var(--text)" }}
+              title={summary.title}
+            >
+              {summary.title}
+            </div>
+            <div
+              className="mt-1 line-clamp-2 text-token-xs leading-relaxed"
+              style={{ color: "var(--text-muted)" }}
+              title={summary.detail}
+            >
+              {summary.detail}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-1 flex items-center justify-between text-token-xs">
+            <span style={{ color: "var(--text-muted)" }}>完成度</span>
+            <span className="font-mono" style={{ color: "var(--text)" }}>
+              {summary.completed}/{summary.total || 1} · {pctLabel}
+            </span>
+          </div>
+          <div
+            className="h-2 overflow-hidden rounded-full"
+            style={{ background: "var(--bg-selected)" }}
+            aria-label={`任务完成度 ${pctLabel}`}
+          >
+            <div
+              className="h-full rounded-full transition-[width]"
+              style={{
+                width: `${summary.percent}%`,
+                background:
+                  summary.tone === "error"
+                    ? "var(--color-danger)"
+                    : summary.tone === "running"
+                      ? "var(--color-warning)"
+                      : "var(--accent)",
+              }}
+            />
+          </div>
+        </div>
+
+        {summary.steps.length > 0 ? (
+          <div className="space-y-1">
+            {summary.steps.slice(0, 4).map((step) => (
+              <div
+                key={step.id}
+                className="flex min-w-0 items-center gap-2 rounded px-1.5 py-1 text-token-xs"
+                style={{
+                  background:
+                    step.status === "running" ? "var(--color-warning-bg)" : "transparent",
+                  color: "var(--text-muted)",
+                }}
+              >
+                <span
+                  className="h-1.5 w-1.5 shrink-0 rounded-full"
+                  style={{
+                    background:
+                      step.status === "completed"
+                        ? "var(--accent)"
+                        : step.status === "running"
+                          ? "var(--color-warning)"
+                          : step.status === "failed" || step.status === "blocked"
+                            ? "var(--color-danger)"
+                            : "var(--border)",
+                  }}
+                />
+                <span
+                  className="min-w-0 flex-1 truncate"
+                  style={{ color: step.status === "running" ? "var(--text)" : undefined }}
+                  title={step.title}
+                >
+                  {step.title}
+                </span>
+                <span className="shrink-0">{stepStatusLabel(step.status)}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="grid grid-cols-2 gap-1.5">
+          <CockpitMetric label="步骤" value={summary.total ? `${summary.completed}/${summary.total}` : "0/1"} />
+          <CockpitMetric label="主产物" value={summary.artifactLabel} />
+          <CockpitMetric label="证据" value={summary.evidenceLabel} />
+          <CockpitMetric label="浏览器" value={browserStatus} />
+        </div>
+      </div>
+      <div
+        className="flex items-center justify-between gap-2 border-t px-3 py-2"
+        style={{ borderColor: "var(--border-soft)" }}
+      >
+        <button
+          type="button"
+          onClick={onOpenProgress}
+          className="rounded px-2 py-1 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+          style={{ color: "var(--accent)" }}
+        >
+          查看详细进度
+        </button>
+        {streaming && onAbort ? (
+          <AbortTaskButton testId="workbench-progress-stop" onAbort={onAbort} />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function CockpitMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      className="min-w-0 rounded px-2 py-1.5"
+      style={{ background: "var(--bg-selected)" }}
+    >
+      <div
+        className="truncate text-token-xs"
+        style={{ color: "var(--text-muted)" }}
+      >
+        {label}
+      </div>
+      <div
+        className="mt-0.5 truncate font-mono text-token-xs font-semibold"
+        style={{ color: "var(--text)" }}
+        title={value}
+      >
+        {value}
+      </div>
     </div>
   );
 }
@@ -1398,6 +1603,157 @@ function EmptyDetail({ title, body }: { title: string; body: string }) {
   );
 }
 
+function shortDisplayText(value: string, max = 80): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= max) return compact;
+  return `${compact.slice(0, Math.max(0, max - 1))}...`;
+}
+
+function summarizePrimaryArtifact(artifacts: ProgressArtifact[]): string {
+  const candidate = artifacts.find(
+    (artifact) =>
+      artifact.title !== "任务契约" &&
+      ["url", "browser", "screenshot", "file", "diff", "test"].includes(
+        artifact.kind
+      )
+  );
+  if (!candidate) return "待锁定";
+  return shortDisplayText(
+    candidate.title ||
+      candidate.href?.split(/[\\/]/).pop() ||
+      artifactKindLabel(candidate.kind),
+    48
+  );
+}
+
+function summarizeRequiredEvidence(
+  contract: ExecutionContractSummary | null,
+  artifacts: ProgressArtifact[]
+): string {
+  const fromContract = contract?.requiredEvidence ?? [];
+  const fromArtifacts = artifacts.flatMap(
+    (artifact) => artifact.requiredEvidence ?? []
+  );
+  const required = [...new Set([...fromContract, ...fromArtifacts])];
+  if (required.length === 0) return "待记录";
+  const label = required.slice(0, 2).join(", ");
+  return required.length > 2 ? `${label} +${required.length - 2}` : label;
+}
+
+type ProgressCockpitSummary = {
+  title: string;
+  detail: string;
+  statusLabel: string;
+  tone?: "running" | "done" | "error";
+  percent: number;
+  completed: number;
+  total: number;
+  steps: ProgressGroup["steps"];
+  artifactLabel: string;
+  evidenceLabel: string;
+  contractLabel: string;
+};
+
+function summarizeProgressCockpit(
+  progress: AgentProgress | null,
+  contract: ExecutionContractSummary | null,
+  streaming: boolean
+): ProgressCockpitSummary {
+  const groups = normalizedGroups(progress);
+  const currentGroup = groups.at(-1);
+  const steps = currentGroup?.steps ?? [];
+  const artifacts = progress?.artifacts ?? [];
+  const artifactLabel = summarizePrimaryArtifact(artifacts);
+  const evidenceLabel = summarizeRequiredEvidence(contract, artifacts);
+  const contractLabel = contract?.rubricProfile ?? "未生成";
+  const total = steps.length;
+  const completed = steps.filter((step) => step.status === "completed").length;
+  const running = steps.find((step) => step.status === "running");
+  const failedOrBlocked = steps.find(
+    (step) => step.status === "failed" || step.status === "blocked"
+  );
+  const percent =
+    total > 0
+      ? Math.max(0, Math.min(100, Math.round((completed / total) * 100)))
+      : streaming
+        ? 8
+        : 0;
+
+  if (failedOrBlocked) {
+    return {
+      title: contract ? shortDisplayText(contract.objective, 90) : failedOrBlocked.title,
+      detail: failedOrBlocked.summary ?? "需要处理后才能继续。",
+      statusLabel: failedOrBlocked.status === "blocked" ? "blocked" : "failed",
+      tone: "error",
+      percent,
+      completed,
+      total,
+      steps,
+      artifactLabel,
+      evidenceLabel,
+      contractLabel,
+    };
+  }
+
+  if (running) {
+    return {
+      title: contract ? shortDisplayText(contract.objective, 90) : running.title,
+      detail:
+        running.summary ??
+        `第 ${currentGroup?.index ?? 1} 组任务 · ${completed}/${total} 已完成`,
+      statusLabel: "running",
+      tone: "running",
+      percent: Math.max(percent, 8),
+      completed,
+      total,
+      steps,
+      artifactLabel,
+      evidenceLabel,
+      contractLabel,
+    };
+  }
+
+  if (total > 0) {
+    return {
+      title: contract
+        ? shortDisplayText(contract.objective, 90)
+        : completed >= total
+          ? "当前任务步骤已完成"
+          : "等待下一步执行",
+      detail: `第 ${currentGroup?.index ?? 1} 组任务 · ${completed}/${total} 已完成`,
+      statusLabel: completed >= total ? "done" : "pending",
+      tone: completed >= total ? "done" : undefined,
+      percent,
+      completed,
+      total,
+      steps,
+      artifactLabel,
+      evidenceLabel,
+      contractLabel,
+    };
+  }
+
+  return {
+    title: contract
+      ? shortDisplayText(contract.objective, 90)
+      : streaming
+        ? "任务已开始，等待模型响应"
+        : "暂无进行中的任务",
+    detail: streaming
+      ? "agent 正在启动或准备第一步，收到进度事件后会显示具体动作。"
+      : "发起任务后，这里会显示当前目标、执行阶段和产物。",
+    statusLabel: streaming ? "starting" : "idle",
+    tone: streaming ? "running" : undefined,
+    percent,
+    completed,
+    total: 1,
+    steps,
+    artifactLabel,
+    evidenceLabel,
+    contractLabel,
+  };
+}
+
 function summarizeProgress(progress: AgentProgress | null) {
   const groups = normalizedGroups(progress);
   const steps = groups.at(-1)?.steps ?? [];
@@ -1421,6 +1777,14 @@ function summarizeProgress(progress: AgentProgress | null) {
     badge: `${completed}/${steps.length}`,
     tone: failed || blocked ? "error" : running ? "running" : "done",
   } as const;
+}
+
+function stepStatusLabel(status: ProgressGroup["steps"][number]["status"]) {
+  if (status === "completed") return "done";
+  if (status === "running") return "now";
+  if (status === "blocked") return "blocked";
+  if (status === "failed") return "failed";
+  return "next";
 }
 
 function normalizedGroups(progress: AgentProgress | null): ProgressGroup[] {

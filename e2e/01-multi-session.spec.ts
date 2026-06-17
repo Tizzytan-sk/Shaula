@@ -376,6 +376,30 @@ test("场景 4: 新建任务立即成为真实 session, 不停留在 draft", asy
   expect(aInput).toBe("");
 });
 
+test("场景 4b: 新建任务在 sessions refresh 慢半拍时仍留在侧栏", async ({
+  bootedPage: page,
+}) => {
+  await page.evaluate(() => {
+    const w = window as unknown as { __mockOmitNewSessionRows?: boolean };
+    w.__mockOmitNewSessionRows = true;
+  });
+
+  await newChatBtn(page).click();
+  await page.waitForFunction(() => {
+    const w = window as unknown as {
+      __chatAppDiag?: { activeKey: () => string };
+    };
+    return w.__chatAppDiag!.activeKey() !== "draft";
+  });
+
+  await expect(page.getByText("新任务", { exact: true })).toBeVisible();
+  await page.waitForTimeout(600);
+  await expect(page.getByText("新任务", { exact: true })).toBeVisible();
+
+  await editor(page).fill("列表不能消失");
+  await expect(editor(page)).toHaveValue("列表不能消失");
+});
+
 // ---------- 场景 5 ----------
 test("场景 5: 开 9 个 session,LRU 踢最旧", async ({ bootedPage: page }) => {
   for (let i = 0; i < 9; i++) {

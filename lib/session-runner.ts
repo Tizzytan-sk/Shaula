@@ -14,6 +14,7 @@
  *     delete("draft") + set(sessionFile, runner)，然后新建空草稿
  */
 import { EMPTY_BROWSER_SNAPSHOT, type BrowserSnapshot } from "./browser/types";
+import type { ExecutionContractSummary } from "./execution-contract/types";
 import type { AgentGoal } from "./goal/types";
 import type { AgentProgress } from "./progress/types";
 import type {
@@ -119,6 +120,7 @@ export interface RunnerState {
   pendingMessages: PendingMessagesSnapshot;
   browser: BrowserSnapshot;
   goal: AgentGoal | null;
+  contract: ExecutionContractSummary | null;
   progress: AgentProgress | null;
 
   // thinking 能力
@@ -169,6 +171,7 @@ export function emptyRunner(): RunnerState {
     pendingMessages: { steering: [], followUp: [] },
     browser: { ...EMPTY_BROWSER_SNAPSHOT, logs: [] },
     goal: null,
+    contract: null,
     progress: null,
 
     thinkingLevel: "medium",

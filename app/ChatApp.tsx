@@ -856,7 +856,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           modified: now,
           messageCount: existing?.messageCount ?? 0,
           isRunning: running || existing?.isRunning === true,
-          runtimeState: running ? "streaming" : existing?.runtimeState,
+          runtimeState: running ? "streaming" : existing?.runtimeState ?? "loading",
           parentSessionPath: existing?.parentSessionPath,
           waitingApprovalCount: existing?.waitingApprovalCount,
           waitingClarificationCount: existing?.waitingClarificationCount,
@@ -1428,6 +1428,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     stats,
     toolsCount,
     goal,
+    contract,
     progress,
     thinkingLevel,
     availableThinkingLevels,
@@ -2431,8 +2432,17 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   const handleGoalClear = useCallback(async () => {
     if (!agentId) return;
-    await agentAction(agentId, { type: "goal_clear" }).catch(() => {});
-  }, [agentId, agentAction]);
+    const result = (await agentAction(agentId, { type: "goal_clear" }).catch(
+      () => null
+    )) as { goal?: null; progress?: AgentProgress | null } | null;
+    if (result) {
+      updateRunner(activeKeyRef.current, {
+        goal: result.goal ?? null,
+        contract: null,
+        progress: result.progress ?? null,
+      });
+    }
+  }, [activeKeyRef, agentId, agentAction, updateRunner]);
 
   const handleGoalRunVerification = useCallback(async () => {
     if (!agentId) return;
@@ -3154,6 +3164,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         agentId={agentId}
         runtimeIdentity={runtimeIdentity}
         progress={displayProgress}
+        contract={contract}
         streaming={streaming}
         browserSnapshot={activeSnapshot.browser}
         browserOpenRequest={browserOpenRequest}

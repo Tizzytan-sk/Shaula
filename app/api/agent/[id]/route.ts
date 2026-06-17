@@ -50,6 +50,7 @@ import {
   getExecutionContract,
   putExecutionContract,
 } from "@/lib/execution-contract/store";
+import type { ExecutionContract } from "@/lib/execution-contract/types";
 import { listDefinitions } from "@/lib/subagents/registry";
 import {
   buildAgentMentionDirective,
@@ -149,6 +150,79 @@ function parseStringList(raw: unknown): string[] | undefined {
     .filter(Boolean)
     .slice(0, 12);
   return values.length > 0 ? values : undefined;
+}
+
+function shortText(value: string, max = 120): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length > max ? `${compact.slice(0, max - 1)}...` : compact;
+}
+
+function buildPromptRunProtocol(contract: ExecutionContract): string {
+  return [
+    "Shaula task contract for this run:",
+    `- id: ${contract.id}`,
+    `- objective: ${contract.objective}`,
+    `- rubric profile: ${contract.rubricProfile}`,
+    `- required evidence: ${contract.requiredEvidence.join(", ") || "goal_evidence"}`,
+    "",
+    "Execution protocol:",
+    "1. Before meaningful edits, identify the active project surface and main artifact: cwd, entrypoint, URL/file, or output path. If multiple candidates exist, choose one explicitly or ask when the choice is risky.",
+    "2. For product/UI/workbench/dashboard tasks, set the information architecture before local component patching: first-screen purpose, key metrics/status, next user action, detail surfaces, and acceptance criteria.",
+    "3. If the user has already rejected two iterations or says the result is still wrong/乱/没改好, stop cosmetic patching and run structural diagnosis before more edits.",
+    "4. Use update_progress early. Keep the visible steps current and attach artifacts for files, URLs, screenshots, tests, diffs, logs, or browser observations.",
+    "5. For frontend/UI work, verify with a browser observation or screenshot when possible; build/typecheck alone is not enough to claim the experience works.",
+    "6. At handoff, state the main artifact, verification evidence, satisfied criteria, and any known gaps. Do not claim completion from intention alone.",
+    "",
+    "File governance:",
+    "- Do not create sibling project directories, temporary leading-space folders, or multiple unexplained versions.",
+    "- If exploration versions are necessary, label exactly one as active and explain archive/draft paths.",
+  ].join("\n");
+}
+
+function initialPromptProgress(contract: ExecutionContract): ProgressUpdateInput {
+  const objective = shortText(contract.objective, 140);
+  return {
+    replaceSteps: true,
+    replaceArtifacts: true,
+    steps: [
+      {
+        id: "task-contract",
+        title: `确认任务契约：${objective}`,
+        status: "completed",
+        summary: `${contract.rubricProfile} · evidence: ${
+          contract.requiredEvidence.join(", ") || "goal_evidence"
+        }`,
+      },
+      {
+        id: "main-artifact",
+        title: "锁定主产物",
+        status: "running",
+        summary: "先确认用户最终应该打开或检查的文件、URL、页面或输出路径。",
+      },
+      {
+        id: "execute-work",
+        title: "执行改动或分析",
+        status: "pending",
+        summary: "按契约范围推进，不做无关重构。",
+      },
+      {
+        id: "verify-handoff",
+        title: "验证并交付",
+        status: "pending",
+        summary: "跑必要检查，交付主产物、验证结果和剩余缺口。",
+      },
+    ],
+    artifacts: [
+      {
+        id: `contract-${contract.id}`,
+        kind: "other",
+        title: "任务契约",
+        summary: `${objective} · ${contract.rubricProfile}`,
+        requiredEvidence: contract.requiredEvidence,
+        contractCriterionId: "objective-met",
+      },
+    ],
+  };
 }
 
 function messageFromError(error: unknown): string {
@@ -361,6 +435,7 @@ export async function GET(
     memoryProgress.artifacts.length === 0
       ? await readPersistedProgress(rec.session.sessionId)
       : null;
+  const goal = getGoal(id);
 
   return NextResponse.json({
     id: rec.id,
@@ -384,7 +459,8 @@ export async function GET(
       : null,
     pendingMessageCount: rec.session.pendingMessageCount,
     nextSeq: rec.nextSeq,
-    goal: getGoal(id),
+    goal,
+    contract: getExecutionContract(goal?.contractId ?? rec.activeContractId),
     progress: persistedProgress ?? memoryProgress,
   });
 }
@@ -573,17 +649,37 @@ export async function POST(
         if (mentionDirective) {
           asideSections.push(mentionDirective.directive);
         }
-        const asideContext = asideSections.join("\n\n");
+        const activeGoal = getGoal(id);
         const routeDecision = recordRouteDecision(
           inferAdvisoryRouteDecision({
             agentId: id,
             text,
-            hasActiveGoal: getGoal(id)?.status === "active",
+            hasActiveGoal: activeGoal?.status === "active",
             attachments,
             mentionedAgents: mentionDirective?.agentIds,
             override: parseRouteOverride(body),
           })
         );
+        let promptContract: ExecutionContract | null = null;
+        let promptProgress: ReturnType<typeof getProgress> | null = null;
+        if (!rec.isStreaming && activeGoal?.status !== "active") {
+          promptContract = putExecutionContract(
+            buildExecutionContract({
+              agentId: id,
+              objective: text,
+            })
+          );
+          rec.activeContractId = promptContract.id;
+          asideSections.push(buildPromptRunProtocol(promptContract));
+          promptProgress = updateProgress(
+            id,
+            initialPromptProgress(promptContract)
+          );
+          await persistProgressForAgent(rec, promptProgress);
+          pushProgressEvent(rec, promptProgress);
+        }
+
+        const asideContext = asideSections.join("\n\n");
 
         // 3) 组装发给模型的文本：用户原话 + 用分隔标记包裹的上下文。
         //    为什么不用 sendCustomMessage(role:"custom") 注入？
@@ -602,6 +698,8 @@ export async function POST(
             return NextResponse.json({
               ok: true,
               routeDecision,
+              ...(promptContract ? { contract: promptContract } : {}),
+              ...(promptProgress ? { progress: promptProgress } : {}),
               ...(mentionDirective
                 ? { routedSpecialists: mentionDirective.agentIds }
                 : {}),
@@ -623,6 +721,8 @@ export async function POST(
         return NextResponse.json({
           ok: true,
           routeDecision,
+          ...(promptContract ? { contract: promptContract } : {}),
+          ...(promptProgress ? { progress: promptProgress } : {}),
           ...(mentionDirective
             ? { routedSpecialists: mentionDirective.agentIds }
             : {}),
@@ -668,9 +768,11 @@ export async function POST(
       }
 
       case "goal_status": {
+        const goal = getGoal(id);
         return NextResponse.json({
           ok: true,
-          goal: getGoal(id),
+          goal,
+          contract: getExecutionContract(goal?.contractId ?? rec.activeContractId),
           progress: getProgress(id),
           routeDecision: latestRouteDecision(id),
         });
@@ -709,6 +811,7 @@ export async function POST(
             requiredEvidence: parseStringList(body.requiredEvidence),
           })
         );
+        rec.activeContractId = contract.id;
         const goal = setGoal(id, objective, tokenBudget, {
           contractId: contract.id,
         });
@@ -723,7 +826,7 @@ export async function POST(
           })
         );
         pushGoalEvent(rec, goal);
-        const progress = clearProgress(id);
+        const progress = updateProgress(id, initialPromptProgress(contract));
         await persistProgressForAgent(rec, progress);
         pushProgressEvent(rec, progress);
 
@@ -783,11 +886,12 @@ export async function POST(
 
       case "goal_clear": {
         clearGoal(id);
+        rec.activeContractId = undefined;
         const progress = clearProgress(id);
         await persistProgressForAgent(rec, progress);
         pushGoalEvent(rec, null);
         pushProgressEvent(rec, progress);
-        return NextResponse.json({ ok: true, goal: null });
+        return NextResponse.json({ ok: true, goal: null, contract: null, progress });
       }
 
       case "progress_update": {

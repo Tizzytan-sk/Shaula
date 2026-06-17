@@ -154,6 +154,9 @@ const SHAULA_CODING_SYSTEM_PROMPT_OVERRIDE = [
   "- Keep changes simple and surgical: implement only what was requested, avoid speculative abstractions, and match the existing code style.",
   "- Every changed line should trace to the user's request. Do not refactor unrelated code or clean up unrelated dead code.",
   "- Work toward verifiable goals: define what should pass, then run the narrowest useful checks before calling the work done.",
+  "- Before meaningful coding, identify the active project surface and main artifact when the workspace has multiple candidate apps, pages, or generated versions.",
+  "- For product/UI/workbench/dashboard tasks, set the information architecture before local visual patching: first-screen purpose, key status/metrics, next action, and verification target.",
+  "- If the user rejects two iterations or says the result is still wrong, stop cosmetic patching and diagnose whether the main artifact, information architecture, or acceptance criteria are wrong.",
 ].join("\n");
 const LOCAL_CODING_ASSISTANT_CLI = String.fromCharCode(
   99,
@@ -225,6 +228,8 @@ export interface AgentRecord {
   /** local shim 可能给完整 assistant 内容但漏掉 done/end，用 watchdog 兜底收尾 */
   finishWatchdog: ReturnType<typeof setTimeout> | null;
   pendingFinishMessage: unknown | null;
+  /** 当前普通 run/goal 的用户可见执行契约。Goal 自身仍以 goal.contractId 为准。 */
+  activeContractId?: string;
   external?: {
     kind: "local-coding-assistant";
     child: ChildProcessWithoutNullStreams | null;

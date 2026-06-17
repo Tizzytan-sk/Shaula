@@ -26,6 +26,8 @@ test("workbench: Overview 作为右侧 root 并支持折叠分组", async ({
   await page.getByLabel("Workbench 面板").click();
 
   await expect(page.getByTestId("workbench-overview")).toBeVisible();
+  await expect(page.getByTestId("workbench-task-cockpit")).toBeVisible();
+  await expect(page.getByTestId("workbench-task-cockpit")).toContainText("当前任务");
   await expect(page.getByTestId("workbench-section-progress")).toBeVisible();
   await expect(page.getByTestId("workbench-section-outputs")).toBeVisible();
   await expect(page.getByTestId("workbench-section-files")).toBeVisible();
@@ -72,7 +74,7 @@ test("workbench: Overview 作为右侧 root 并支持折叠分组", async ({
   await expect(page.getByTestId("workbench-overview")).toBeVisible();
 });
 
-test("workbench: 运行中的任务即使未上报进度也显示状态和终止入口", async ({
+test("workbench: 运行中的任务显示任务契约、主产物和终止入口", async ({
   bootedPage: page,
 }) => {
   await page.locator("textarea").first().fill("run a long task");
@@ -83,8 +85,12 @@ test("workbench: 运行中的任务即使未上报进度也显示状态和终止
 
   await expect(page.getByTestId("composer-stop-task")).toBeVisible();
   await page.getByLabel("Workbench 面板").click();
+  await expect(page.getByTestId("workbench-task-cockpit")).toContainText("run a long task");
+  await expect(page.getByTestId("workbench-task-cockpit")).toContainText("主产物");
+  await expect(page.getByTestId("workbench-task-cockpit")).toContainText("待锁定");
+  await expect(page.getByTestId("workbench-task-cockpit")).toContainText("diff");
   await expect(page.getByTestId("workbench-section-progress")).toContainText(
-    "等待模型响应"
+    "锁定主产物"
   );
   await expect(page.getByTestId("workbench-progress-stop")).toBeVisible();
 

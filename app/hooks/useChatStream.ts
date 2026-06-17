@@ -40,6 +40,7 @@ import {
   type RunnerPatch,
   type RunnerState,
 } from "@/lib/session-runner";
+import type { ExecutionContractSummary } from "@/lib/execution-contract/types";
 import type { AgentProgress, ProgressStep } from "@/lib/progress/types";
 import { userFacingMessage } from "@/lib/user-facing-error";
 import {
@@ -463,19 +464,28 @@ export function useChatStream(
       }),
     }));
     try {
-      await agentAction(aid!, {
+      const actionResult = (await agentAction(aid!, {
         type: "prompt",
         text: displayText,
         images: images.length > 0 ? images : undefined,
         attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
         clientRequestId,
-      });
+      })) as {
+        contract?: ExecutionContractSummary | null;
+        progress?: AgentProgress | null;
+      };
       updateRunner(ownerKeyForPrompt, (state) => ({
         chatState: markOptimisticUserMessage(
           state.chatState,
           clientRequestId,
           { status: "sent" }
         ),
+        ...(actionResult.contract !== undefined
+          ? { contract: actionResult.contract }
+          : {}),
+        ...(actionResult.progress !== undefined
+          ? { progress: actionResult.progress }
+          : {}),
       }));
     } catch (error) {
       updateRunner(ownerKeyForPrompt, (state) => ({
@@ -527,15 +537,22 @@ export function useChatStream(
       if (!ensured) return;
       setError(null);
       try {
-        await agentAction(ensured.aid, {
+        const result = (await agentAction(ensured.aid, {
           type: "goal_set",
           objective: text,
+        })) as {
+          contract?: ExecutionContractSummary | null;
+          progress?: AgentProgress | null;
+        };
+        updateRunner(ensured.ownerKey, {
+          ...(result.contract !== undefined ? { contract: result.contract } : {}),
+          ...(result.progress !== undefined ? { progress: result.progress } : {}),
         });
       } catch {
         /* error 已被 agentAction 设置 */
       }
     },
-    [ensureAgent, agentAction, setError]
+    [ensureAgent, agentAction, setError, updateRunner]
   );
 
   /**
@@ -567,9 +584,16 @@ export function useChatStream(
       setPinSpacer(true);
 
       try {
-        await agentAction(ensured.aid, {
+        const result = (await agentAction(ensured.aid, {
           type: "prompt",
           text: prompt,
+        })) as {
+          contract?: ExecutionContractSummary | null;
+          progress?: AgentProgress | null;
+        };
+        updateRunner(ensured.ownerKey, {
+          ...(result.contract !== undefined ? { contract: result.contract } : {}),
+          ...(result.progress !== undefined ? { progress: result.progress } : {}),
         });
       } catch {
         /* error 已被 agentAction 设置 */
@@ -582,6 +606,7 @@ export function useChatStream(
       messages,
       pendingPinUserCountRef,
       setPinSpacer,
+      updateRunner,
     ]
   );
 

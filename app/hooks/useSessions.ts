@@ -138,6 +138,38 @@ function sameSessionList(a: SessionInfoLite[], b: SessionInfoLite[]): boolean {
   return true;
 }
 
+function shouldPreserveLocalSession(
+  session: SessionInfoLite,
+  selectedId: string | null
+): boolean {
+  if (session.id === selectedId) return true;
+  if (session.isRunning === true) return true;
+  return (
+    session.runtimeState === "loading" ||
+    session.runtimeState === "streaming" ||
+    session.runtimeState === "waiting_user" ||
+    session.runtimeState === "reconnecting"
+  );
+}
+
+function mergeRefreshedSessions(
+  prev: SessionInfoLite[],
+  refreshed: SessionInfoLite[],
+  selectedId: string | null
+): SessionInfoLite[] {
+  if (prev.length === 0) return refreshed;
+  const refreshedIds = new Set(refreshed.map((session) => session.id));
+  const refreshedPaths = new Set(refreshed.map((session) => session.path));
+  const preserved = prev.filter(
+    (session) =>
+      !refreshedIds.has(session.id) &&
+      !refreshedPaths.has(session.path) &&
+      shouldPreserveLocalSession(session, selectedId)
+  );
+  if (preserved.length === 0) return refreshed;
+  return [...preserved, ...refreshed];
+}
+
 export interface UseSessionsOptions {
   initialSessions: SessionInfoLite[];
   /** LRU / 删 session 时关 SSE */
@@ -297,7 +329,10 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
       .then((r) => r.json())
       .then((d: { sessions?: SessionInfoLite[] }) => {
         const next = d.sessions ?? [];
-        setSessions((prev) => (sameSessionList(prev, next) ? prev : next));
+        setSessions((prev) => {
+          const merged = mergeRefreshedSessions(prev, next, selectedId);
+          return sameSessionList(prev, merged) ? prev : merged;
+        });
         setLastSeenMap((prev) => {
           const merged = mergeServerLastSeen(prev, next);
           if (merged !== prev) writeLastSeenToStorage(merged);
@@ -305,7 +340,7 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
         });
       })
       .catch(() => {});
-  }, []);
+  }, [selectedId]);
 
   // 首屏立即校验最新 session 列表。SSR / E2E / 移动远程入口可能先给
   // 一个轻量初始列表，主动刷新能减少切 session 前的空白等待。
