@@ -23,7 +23,8 @@ import { collectGoalVerificationInput } from "./verification-input";
  */
 export function applyGoalUpdate(
   agentId: string,
-  input: GoalUpdateInput
+  input: GoalUpdateInput,
+  options: { sessionId?: string | null } = {}
 ): GoalUpdateResult {
   const current = getGoal(agentId);
   if (!current) {
@@ -51,9 +52,14 @@ export function applyGoalUpdate(
   }
 
   // status === "complete": verify before accepting.
-  const collected = collectGoalVerificationInput(agentId, current);
+  const collected = collectGoalVerificationInput(agentId, current, options);
   if (!collected) return { goal: current, accepted: false };
-  const verification = verifyGoalCompletion(collected.input);
+  const completionClaim = completionClaimFromInput(input);
+  const verification = verifyGoalCompletion({
+    ...collected.input,
+    completionClaim,
+    requireCompletionClaim: shouldRequireCompletionClaim(collected.input),
+  });
 
   if (verification.decision === "reject") {
     reconcileEvaluationActions({
@@ -79,6 +85,8 @@ export function applyGoalUpdate(
     blockedStreak: 0,
     lastEvaluation: verification.evaluation,
     lastClosure: undefined,
+    lastCompletionClaim: completionClaim,
+    lastFinalMessageAudit: undefined,
     ...(current.blockedState && current.blockedState.resolvedAt === undefined
       ? {
           blockedState: {
@@ -93,4 +101,30 @@ export function applyGoalUpdate(
     evaluation: verification.evaluation,
   });
   return { goal, accepted: true, evaluation: verification.evaluation };
+}
+
+function completionClaimFromInput(input: GoalUpdateInput) {
+  const finalSummary =
+    typeof input.finalSummary === "string"
+      ? input.finalSummary.trim().slice(0, 4000)
+      : "";
+  const evidenceIds = Array.isArray(input.evidenceIds)
+    ? [
+        ...new Set(
+          input.evidenceIds
+            .filter((id): id is string => typeof id === "string")
+            .map((id) => id.trim())
+            .filter(Boolean)
+            .slice(0, 50)
+        ),
+      ]
+    : [];
+  if (!finalSummary && evidenceIds.length === 0) return undefined;
+  return { finalSummary, evidenceIds };
+}
+
+function shouldRequireCompletionClaim(
+  input: Parameters<typeof verifyGoalCompletion>[0]
+): boolean {
+  return Boolean(input.contract) || Boolean(input.goal.acceptanceCriteria?.length);
 }

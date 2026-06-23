@@ -330,6 +330,7 @@ export function useChatStream(
       ...(typeof data.supportsThinking === "boolean"
         ? { supportsThinking: data.supportsThinking }
         : {}),
+      runtimeProfile: data.runtimeProfile ?? null,
     });
     onSessionCreated?.({
       sessionId: typeof data.sessionId === "string" ? data.sessionId : null,
@@ -418,6 +419,7 @@ export function useChatStream(
         ...(typeof data.supportsThinking === "boolean"
           ? { supportsThinking: data.supportsThinking }
           : {}),
+        runtimeProfile: data.runtimeProfile ?? null,
       });
       onSessionCreated?.({
         sessionId: typeof data.sessionId === "string" ? data.sessionId : null,

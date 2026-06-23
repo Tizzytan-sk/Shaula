@@ -16,6 +16,7 @@
 
 import { NextResponse } from "next/server";
 
+import { assertApiAccess } from "@/lib/api-boundary";
 import { search } from "@/lib/search";
 import type { SearchResponse } from "@/lib/search/types";
 
@@ -28,6 +29,8 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
 export async function POST(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const t0 = Date.now();
   try {
     const body = (await req.json().catch(() => ({}))) as {

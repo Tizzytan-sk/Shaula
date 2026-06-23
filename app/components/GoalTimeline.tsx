@@ -8,6 +8,7 @@ import {
   ClipboardCheck,
   FileText,
   Loader2,
+  Boxes,
   XCircle,
 } from "lucide-react";
 import type { AgentGoal, GoalEvidence, GoalTurn } from "@/lib/goal/types";
@@ -19,6 +20,13 @@ import type {
 } from "@/lib/evidence/types";
 import type { EvaluationAction } from "@/lib/evaluation-actions/types";
 import type { AdvisoryRouteDecision } from "@/lib/task-router/types";
+import type { TeamTask } from "@/lib/team-state/types";
+import type {
+  TeamTaskSynthesisAssistanceMeta,
+  TeamTaskSynthesisItem,
+  TeamTaskSynthesisSummary,
+} from "@/lib/team-state/synthesis";
+import type { TeamTaskVerificationSummary } from "@/lib/team-state/verifier";
 import { userFacingMessage } from "@/lib/user-facing-error";
 import {
   evidenceTrustLabel,
@@ -39,6 +47,9 @@ interface TimelinePayload {
   ledgerEvidence: EvidenceRef[];
   actions: EvaluationAction[];
   routeDecision: AdvisoryRouteDecision | null;
+  teamTasks: TeamTask[];
+  teamTaskVerification: TeamTaskVerificationSummary | null;
+  teamTaskSynthesis: TeamTaskSynthesisSummary | null;
   lastClosure: GoalRunClosure | null;
 }
 
@@ -205,6 +216,24 @@ function collectAttentionItems(data: TimelinePayload): AttentionItem[] {
     });
   }
 
+  for (const task of data.teamTasks) {
+    if (task.status !== "failed" && task.status !== "warning" && task.status !== "blocked") {
+      continue;
+    }
+    addAttentionItem(items, seen, {
+      key: `team-task:${task.id}`,
+      label:
+        task.status === "failed"
+          ? "Team task failed"
+          : task.status === "blocked"
+            ? "Team task blocked"
+            : "Team task warning",
+      title: task.title,
+      detail: task.blockedBy ?? task.evidenceIds.join(", "),
+      tone: task.status === "failed" ? "danger" : "warning",
+    });
+  }
+
   return items.slice(0, 8);
 }
 
@@ -231,6 +260,9 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
           : [],
         actions: Array.isArray(json.actions) ? json.actions : [],
         routeDecision: json.routeDecision ?? null,
+        teamTasks: Array.isArray(json.teamTasks) ? json.teamTasks : [],
+        teamTaskVerification: json.teamTaskVerification ?? null,
+        teamTaskSynthesis: json.teamTaskSynthesis ?? null,
         lastClosure: json.lastClosure ?? null,
       });
     } catch (e) {
@@ -314,6 +346,17 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
             <RouteDecisionSummary decision={data.routeDecision} />
           )}
 
+          {data.teamTasks.length > 0 && (
+            <TeamTaskSummary
+              tasks={data.teamTasks}
+              verification={data.teamTaskVerification}
+            />
+          )}
+
+          {data.teamTaskSynthesis && (
+            <TeamSynthesisTimelineSummary synthesis={data.teamTaskSynthesis} />
+          )}
+
           {data.contract && <ContractSummary contract={data.contract} />}
 
           {data.turns.length === 0 &&
@@ -322,6 +365,7 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
             data.ledgerEvidence.length === 0 &&
             data.actions.length === 0 &&
             !data.routeDecision &&
+            data.teamTasks.length === 0 &&
             !data.lastClosure &&
             !data.goal?.lastEvaluation && (
             <div style={{ color: "var(--text-muted)" }}>
@@ -509,6 +553,243 @@ function ClosureSummary({ closure }: { closure: GoalRunClosure }) {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+function teamTaskStatusColor(status: TeamTask["status"]): string {
+  if (status === "completed") return "var(--color-success)";
+  if (status === "failed") return "var(--color-danger)";
+  if (status === "warning" || status === "blocked") return "var(--color-warning)";
+  return "var(--accent)";
+}
+
+function teamTaskVerificationColor(
+  status: TeamTaskVerificationSummary["status"]
+): string {
+  if (status === "passed") return "var(--color-success)";
+  if (status === "warning") return "var(--color-warning)";
+  return "var(--color-danger)";
+}
+
+function teamTaskSourceLabel(task: TeamTask): string {
+  if (task.batchId) return `subagent:${task.batchId}`;
+  if (task.workflowId) return `workflow:${task.workflowId}`;
+  return task.source.type;
+}
+
+function TeamTaskSummary({
+  tasks,
+  verification,
+}: {
+  tasks: TeamTask[];
+  verification: TeamTaskVerificationSummary | null;
+}) {
+  const sorted = tasks
+    .slice()
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
+  const failed = tasks.filter((task) => task.status === "failed").length;
+  const warning = tasks.filter((task) => task.status === "warning").length;
+  const running = tasks.filter((task) => task.status === "running").length;
+  const evidenceRefs = new Set(tasks.flatMap((task) => task.evidenceIds)).size;
+  const color =
+    failed > 0
+      ? "var(--color-danger)"
+      : warning > 0
+        ? "var(--color-warning)"
+        : running > 0
+          ? "var(--accent)"
+          : "var(--color-success)";
+  return (
+    <div
+      className="mb-2 border-b pb-2"
+      style={{ borderColor: "var(--border-soft)" }}
+      data-testid="goal-team-tasks"
+    >
+      <div className="mb-1 flex items-center gap-1.5">
+        <Boxes size={13} className="shrink-0" style={{ color }} />
+        <span className="font-medium">Team tasks</span>
+        <span
+          className="rounded-token-sm px-1 py-0.5 text-token-xs"
+          style={{
+            background: "var(--bg-selected)",
+            color: "var(--text-muted)",
+          }}
+        >
+          {tasks.length}
+        </span>
+        <span
+          className="rounded-token-sm px-1 py-0.5 text-token-xs"
+          style={{
+            background: "var(--bg-selected)",
+            color: verification ? teamTaskVerificationColor(verification.status) : "var(--text-muted)",
+          }}
+        >
+          {verification ? verification.status : `${evidenceRefs} evidence refs`}
+        </span>
+      </div>
+      {verification && (
+        <div
+          className="mb-1 truncate"
+          style={{ color: "var(--text-muted)" }}
+          title={verification.checks.map((check) => check.message).join("\n")}
+        >
+          {verification.summary} · {evidenceRefs} evidence refs
+        </div>
+      )}
+      <ul className="space-y-1">
+        {sorted.slice(0, 6).map((task) => (
+          <li key={task.id} className="min-w-0">
+            <div className="flex min-w-0 items-center gap-1">
+              <span
+                className="shrink-0 rounded-token-sm px-1 py-0.5 text-token-xs"
+                style={{
+                  background: "var(--bg-selected)",
+                  color: teamTaskStatusColor(task.status),
+                }}
+              >
+                {task.status}
+              </span>
+              <span
+                className="min-w-0 truncate"
+                title={task.title}
+              >
+                {task.title}
+              </span>
+            </div>
+            <div
+              className="truncate pl-1"
+              style={{ color: "var(--text-muted)" }}
+              title={task.evidenceIds.join(", ")}
+            >
+              {teamTaskSourceLabel(task)}
+              {task.evidenceIds.length > 0
+                ? ` · evidence ${task.evidenceIds.length}`
+                : " · evidence pending"}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function teamSynthesisStatusColor(status: TeamTaskSynthesisSummary["status"]): string {
+  if (status === "ready") return "var(--color-success)";
+  if (status === "warning") return "var(--color-warning)";
+  return "var(--color-danger)";
+}
+
+function teamSynthesisSeverityColor(
+  severity: TeamTaskSynthesisItem["severity"]
+): string {
+  if (severity === "danger") return "var(--color-danger)";
+  if (severity === "warning") return "var(--color-warning)";
+  return "var(--accent)";
+}
+
+function teamAssistMetaText(
+  meta: TeamTaskSynthesisAssistanceMeta | undefined
+): string {
+  if (!meta) return "";
+  const parts: string[] = [meta.cached ? "cached" : "fresh"];
+  if (meta.model) parts.push(`${meta.model.provider}/${meta.model.id}`);
+  if (typeof meta.latencyMs === "number") parts.push(`${meta.latencyMs}ms`);
+  if (typeof meta.httpStatus === "number") parts.push(`HTTP ${meta.httpStatus}`);
+  if (typeof meta.tokenCount === "number") parts.push(`${meta.tokenCount} tok`);
+  if (typeof meta.estimatedCost === "number") {
+    parts.push(`$${meta.estimatedCost.toFixed(4)}`);
+  }
+  return parts.join(" · ");
+}
+
+function TeamSynthesisTimelineSummary({
+  synthesis,
+}: {
+  synthesis: TeamTaskSynthesisSummary;
+}) {
+  const assistMeta = synthesis.assistance
+    ? teamAssistMetaText(synthesis.assistance.meta)
+    : "";
+  return (
+    <div
+      className="mb-2 border-b pb-2"
+      style={{ borderColor: "var(--border-soft)" }}
+      data-testid="goal-team-synthesis"
+    >
+      <div className="mb-1 flex items-center gap-1.5">
+        <Boxes
+          size={13}
+          className="shrink-0"
+          style={{ color: teamSynthesisStatusColor(synthesis.status) }}
+        />
+        <span className="font-medium">Team synthesis</span>
+        <span
+          className="rounded-token-sm px-1 py-0.5 text-token-xs"
+          style={{
+            background: "var(--bg-selected)",
+            color: teamSynthesisStatusColor(synthesis.status),
+          }}
+        >
+          {synthesis.status}
+        </span>
+      </div>
+      <div className="mb-1 truncate" title={synthesis.headline}>
+        {synthesis.headline}
+      </div>
+      {synthesis.assistance ? (
+        <div
+          className="mb-1 truncate"
+          style={{
+            color:
+              synthesis.assistance.status === "accepted"
+                ? "var(--accent)"
+                : "var(--color-warning)",
+          }}
+          title={synthesis.assistance.warnings.join("; ")}
+        >
+          LLM assist: {synthesis.assistance.status}
+          {assistMeta ? ` · ${assistMeta}` : ""}
+        </div>
+      ) : null}
+      {synthesis.domains.length > 0 && (
+        <div
+          className="mb-1 truncate"
+          style={{ color: "var(--text-muted)" }}
+          title={synthesis.domains.join(", ")}
+        >
+          Domains: {synthesis.domains.slice(0, 4).join(", ")}
+        </div>
+      )}
+      <ul className="space-y-1">
+        {synthesis.items.slice(0, 4).map((item) => (
+          <li key={item.id} className="min-w-0">
+            <div className="flex min-w-0 items-center gap-1">
+              <span
+                className="shrink-0 rounded-token-sm px-1 py-0.5 text-token-xs"
+                style={{
+                  background: "var(--bg-selected)",
+                  color: teamSynthesisSeverityColor(item.severity),
+                }}
+              >
+                {item.kind}
+              </span>
+              <span className="min-w-0 truncate" title={item.title}>
+                {item.title}
+              </span>
+            </div>
+            {item.detail ? (
+              <div
+                className="truncate pl-1"
+                style={{ color: "var(--text-muted)" }}
+                title={item.detail}
+              >
+                {item.detail}
+              </div>
+            ) : null}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -916,6 +1197,19 @@ function ContractSummary({ contract }: { contract: ExecutionContractSummary }) {
       <div className="truncate" title={contract.objective}>
         {contract.objective}
       </div>
+      {contract.mainArtifact && (
+        <div
+          className="mt-1 flex min-w-0 items-center gap-1 text-token-xs"
+          style={{ color: "var(--text-muted)" }}
+          title={contract.mainArtifact.href ?? contract.mainArtifact.label}
+        >
+          <FileText size={12} className="shrink-0" />
+          <span className="shrink-0 uppercase">
+            {contract.mainArtifact.kind}
+          </span>
+          <span className="truncate">{contract.mainArtifact.label}</span>
+        </div>
+      )}
       {selection && (
         <div
           className="mt-0.5 truncate text-token-xs"

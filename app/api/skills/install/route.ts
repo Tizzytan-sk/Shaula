@@ -17,6 +17,7 @@
  * `{ action:"install", source, local, cwd }`，两者并行存在不冲突。
  */
 import { NextResponse } from "next/server";
+import { assertApiAccess } from "@/lib/api-boundary";
 import { getPackageManager } from "@/lib/agent-registry";
 import os from "node:os";
 
@@ -29,6 +30,8 @@ function resolveCwd(input: string | null | undefined): string {
 }
 
 export async function POST(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   try {
     const body = (await req.json().catch(() => ({}))) as {
       package?: string;

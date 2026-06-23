@@ -12,12 +12,14 @@ describe("local goal dogfood run set", () => {
       "code-change-success",
       "ui-check-success",
       "verifier-rejection",
+      "failed-required-check",
       "needs-user-pause",
       "blocked-pause",
     ]);
     expect(records.map((item) => item.closureVerdict)).toEqual([
       "ready_to_finalize",
       "ready_to_finalize",
+      "continue",
       "continue",
       "needs_user",
       "blocked",
@@ -55,6 +57,22 @@ describe("local goal dogfood run set", () => {
       autoContinueCount: 1,
       verifierRejections: 1,
       openActionCount: 1,
+    });
+    expect(byId.get("failed-required-check")).toMatchObject({
+      verificationDecision: "reject",
+      finalOutcome: "continued_after_rejection",
+      autoContinueCount: 1,
+      verifierRejections: 1,
+      openActionCount: 1,
+    });
+    expect(byId.get("failed-required-check")?.evidence[0]).toMatchObject({
+      kind: "test_result",
+      outcome: "failed",
+      metadata: {
+        required: true,
+        verificationCommandId: "npm-test",
+        evidenceRequired: ["test_result"],
+      },
     });
     expect(byId.get("needs-user-pause")).toMatchObject({
       finalOutcome: "paused_for_user",

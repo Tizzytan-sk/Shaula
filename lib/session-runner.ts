@@ -19,6 +19,7 @@ import type { AgentGoal } from "./goal/types";
 import type { AgentProgress } from "./progress/types";
 import type {
   ForkableUserMessage,
+  AgentRuntimeProfile,
   ImageContentLite,
   ThinkingLevel,
 } from "./types";
@@ -122,6 +123,7 @@ export interface RunnerState {
   goal: AgentGoal | null;
   contract: ExecutionContractSummary | null;
   progress: AgentProgress | null;
+  runtimeProfile: AgentRuntimeProfile | null;
 
   // thinking 能力
   thinkingLevel: ThinkingLevel;
@@ -173,6 +175,7 @@ export function emptyRunner(): RunnerState {
     goal: null,
     contract: null,
     progress: null,
+    runtimeProfile: null,
 
     thinkingLevel: "medium",
     availableThinkingLevels: [...THINKING_LEVELS],

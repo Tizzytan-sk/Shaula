@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { NextResponse } from "next/server";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { assertApiAccess } from "@/lib/api-boundary";
 import { findSessionPathById, getSessionDetail } from "@/lib/sessions";
 import { deleteMeta } from "@/lib/meta/store";
 import { deletePersistedProgress } from "@/lib/progress/file-store";
@@ -9,9 +10,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const { id } = await params;
   try {
     const detail = await getSessionDetail(id);
@@ -32,6 +35,8 @@ export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const { id } = await params;
   try {
     const body = (await req.json()) as { name?: unknown };
@@ -59,9 +64,11 @@ export async function PATCH(
 
 /** DELETE: 删除 session 文件 */
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const { id } = await params;
   try {
     const path = await findSessionPathById(id);

@@ -197,6 +197,7 @@ function SettingsShell({
   const active = SECTION_META[activeSection];
 
   useLayoutEffect(() => {
+    document.documentElement.dataset.shaulaHydrated = "settings";
     try {
       const stored = localStorage.getItem("pi-theme");
       if (stored === "light" || stored === "dark") {

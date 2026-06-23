@@ -1,5 +1,9 @@
 import type { EvidenceListFilter, EvidenceRef } from "./types";
 import { normalizeEvidenceRef } from "./ledger";
+import {
+  appendRuntimeLedgerRecord,
+  readRuntimeLedgerRecords,
+} from "@/lib/runtime/file-ledger";
 
 interface EvidenceStore {
   byId: Map<string, EvidenceRef>;
@@ -12,6 +16,7 @@ if (!g.__shaulaAgentEvidenceStore) {
   g.__shaulaAgentEvidenceStore = { byId: new Map() };
 }
 const store = g.__shaulaAgentEvidenceStore;
+const loadedSessions = new Set<string>();
 
 function matches(value: string | null | undefined, expected?: string | null): boolean {
   return expected === undefined || value === expected;
@@ -34,6 +39,61 @@ function pruneEvidence(): void {
   }
 }
 
+function isEvidenceKind(value: unknown): value is EvidenceRef["kind"] {
+  return (
+    value === "browser_snapshot" ||
+    value === "browser_step" ||
+    value === "browser_annotation" ||
+    value === "workflow_artifact" ||
+    value === "subagent_result" ||
+    value === "goal_turn" ||
+    value === "approval_decision" ||
+    value === "progress_artifact" ||
+    value === "verification_result" ||
+    value === "log"
+  );
+}
+
+function evidenceFromLedger(raw: unknown): EvidenceRef | null {
+  if (!raw || typeof raw !== "object") return null;
+  const item = raw as Partial<EvidenceRef>;
+  if (
+    typeof item.id !== "string" ||
+    !isEvidenceKind(item.kind) ||
+    typeof item.title !== "string" ||
+    typeof item.createdAt !== "number"
+  ) {
+    return null;
+  }
+  return normalizeEvidenceRef(item as EvidenceRef);
+}
+
+function persistEvidence(evidence: EvidenceRef): void {
+  const sessionId = evidence.sessionId;
+  if (!sessionId) return;
+  try {
+    appendRuntimeLedgerRecord(sessionId, "evidence", evidence);
+    loadedSessions.add(sessionId);
+  } catch (err) {
+    console.warn("[evidence-ledger] persist failed:", err);
+  }
+}
+
+function hydrateEvidenceForSession(sessionId: string | null | undefined): void {
+  if (!sessionId || loadedSessions.has(sessionId)) return;
+  loadedSessions.add(sessionId);
+  for (const raw of readRuntimeLedgerRecords<unknown>(sessionId, "evidence")) {
+    const evidence = evidenceFromLedger(raw);
+    if (!evidence) continue;
+    const current = store.byId.get(evidence.id);
+    store.byId.set(
+      evidence.id,
+      normalizeEvidenceRef(current ? { ...current, ...evidence } : evidence)
+    );
+  }
+  pruneEvidence();
+}
+
 export function appendEvidence(evidence: EvidenceRef): EvidenceRef {
   const normalized = normalizeEvidenceRef(evidence);
   const current = store.byId.get(evidence.id);
@@ -41,6 +101,7 @@ export function appendEvidence(evidence: EvidenceRef): EvidenceRef {
     current ? { ...current, ...normalized } : normalized
   );
   store.byId.set(evidence.id, next);
+  persistEvidence(next);
   pruneEvidence();
   return next;
 }
@@ -55,6 +116,7 @@ export function getEvidence(id: string): EvidenceRef | null {
 }
 
 export function listEvidence(filter: EvidenceListFilter = {}): EvidenceRef[] {
+  hydrateEvidenceForSession(filter.sessionId);
   return [...store.byId.values()]
     .map(normalizeEvidenceRef)
     .filter((item) => {
@@ -98,4 +160,5 @@ export function removeEvidence(id: string): boolean {
 
 export function __resetEvidenceStoreForTest(): void {
   store.byId.clear();
+  loadedSessions.clear();
 }

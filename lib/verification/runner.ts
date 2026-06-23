@@ -1,11 +1,38 @@
 import { spawn } from "node:child_process";
 import type {
+  VerificationBrowserCheck,
+  VerificationBrowserResult,
   VerificationCommandCheck,
   VerificationCommandResult,
   VerificationPlan,
+  VerificationResult,
 } from "./types";
 
 const MAX_PREVIEW_CHARS = 12_000;
+
+export interface VerificationBrowserObservation {
+  browserId?: string;
+  status?: VerificationBrowserResult["status"];
+  passed?: boolean;
+  url?: string | null;
+  title?: string | null;
+  screenshotDataUrl?: string | null;
+  textPreview?: string;
+  error?: string;
+  timedOut?: boolean;
+}
+
+export type VerificationBrowserObserver = (
+  check: VerificationBrowserCheck,
+  input: { planId?: string; now: () => number }
+) => Promise<VerificationBrowserObservation>;
+
+class BrowserVerificationTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`browser verification timed out after ${timeoutMs}ms`);
+    this.name = "BrowserVerificationTimeoutError";
+  }
+}
 
 function appendPreview(current: string, chunk: Buffer | string): string {
   const next = current + chunk.toString();
@@ -188,20 +215,174 @@ export async function runVerificationCommand(
   });
 }
 
+function browserFailureResult(
+  check: VerificationBrowserCheck,
+  input: {
+    planId?: string;
+    startedAt: number;
+    completedAt: number;
+    error: string;
+    timedOut?: boolean;
+  }
+): VerificationBrowserResult {
+  return {
+    planId: input.planId,
+    checkId: check.id,
+    kind: "browser_observation",
+    label: check.label,
+    targetUrl: check.targetUrl,
+    selector: check.selector,
+    text: check.text,
+    expectation: check.expectation,
+    required: check.required,
+    evidenceRequired: check.evidenceRequired,
+    rationale: check.rationale,
+    status: input.timedOut ? "timed_out" : "failed",
+    passed: false,
+    error: input.error,
+    durationMs: Math.max(0, input.completedAt - input.startedAt),
+    startedAt: input.startedAt,
+    completedAt: input.completedAt,
+    timedOut: input.timedOut,
+  };
+}
+
+function browserStatus(
+  observation: VerificationBrowserObservation
+): VerificationBrowserResult["status"] {
+  if (observation.status) return observation.status;
+  if (observation.timedOut) return "timed_out";
+  return observation.passed === true ? "passed" : "failed";
+}
+
+async function observeBrowserWithTimeout(
+  check: VerificationBrowserCheck,
+  input: {
+    planId?: string;
+    now: () => number;
+    browserObserver: VerificationBrowserObserver;
+  }
+): Promise<VerificationBrowserObservation> {
+  const timeoutMs = check.timeoutMs;
+  if (!timeoutMs || timeoutMs <= 0) {
+    return input.browserObserver(check, {
+      planId: input.planId,
+      now: input.now,
+    });
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      input.browserObserver(check, {
+        planId: input.planId,
+        now: input.now,
+      }),
+      new Promise<VerificationBrowserObservation>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new BrowserVerificationTimeoutError(timeoutMs)),
+          timeoutMs
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function runVerificationBrowserCheck(
+  check: VerificationBrowserCheck,
+  input: {
+    planId?: string;
+    now?: () => number;
+    browserObserver?: VerificationBrowserObserver;
+  } = {}
+): Promise<VerificationBrowserResult> {
+  const now = input.now ?? Date.now;
+  const startedAt = now();
+  if (!input.browserObserver) {
+    const completedAt = now();
+    return browserFailureResult(check, {
+      planId: input.planId,
+      startedAt,
+      completedAt,
+      error:
+        "browser observer unavailable; open the Browser panel or configure a browser observer before running browser verification",
+    });
+  }
+
+  try {
+    const observation = await observeBrowserWithTimeout(check, {
+      planId: input.planId,
+      now,
+      browserObserver: input.browserObserver,
+    });
+    const completedAt = now();
+    const status = browserStatus(observation);
+    return {
+      planId: input.planId,
+      checkId: check.id,
+      kind: "browser_observation",
+      label: check.label,
+      browserId: observation.browserId,
+      targetUrl: check.targetUrl,
+      selector: check.selector,
+      text: check.text,
+      expectation: check.expectation,
+      required: check.required,
+      evidenceRequired: check.evidenceRequired,
+      rationale: check.rationale,
+      status,
+      passed: status === "passed",
+      url: observation.url,
+      title: observation.title,
+      screenshotDataUrl: observation.screenshotDataUrl,
+      textPreview: observation.textPreview,
+      error: observation.error,
+      durationMs: Math.max(0, completedAt - startedAt),
+      startedAt,
+      completedAt,
+      timedOut: observation.timedOut === true || status === "timed_out",
+    };
+  } catch (error) {
+    const completedAt = now();
+    return browserFailureResult(check, {
+      planId: input.planId,
+      startedAt,
+      completedAt,
+      error: error instanceof Error ? error.message : String(error),
+      timedOut: error instanceof BrowserVerificationTimeoutError,
+    });
+  }
+}
+
 export async function runVerificationPlan(
   plan: VerificationPlan,
-  input: { env?: Record<string, string>; now?: () => number } = {}
-): Promise<VerificationCommandResult[]> {
-  const results: VerificationCommandResult[] = [];
+  input: {
+    env?: Record<string, string>;
+    now?: () => number;
+    browserObserver?: VerificationBrowserObserver;
+  } = {}
+): Promise<VerificationResult[]> {
+  const results: VerificationResult[] = [];
   for (const check of plan.checks) {
-    if (check.type !== "command") continue;
-    results.push(
-      await runVerificationCommand(check, {
-        planId: plan.id,
-        env: input.env,
-        now: input.now,
-      })
-    );
+    if (check.type === "command") {
+      results.push(
+        await runVerificationCommand(check, {
+          planId: plan.id,
+          env: input.env,
+          now: input.now,
+        })
+      );
+    } else {
+      results.push(
+        await runVerificationBrowserCheck(check, {
+          planId: plan.id,
+          now: input.now,
+          browserObserver: input.browserObserver,
+        })
+      );
+    }
   }
   return results;
 }

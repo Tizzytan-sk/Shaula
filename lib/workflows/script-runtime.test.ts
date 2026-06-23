@@ -2,7 +2,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildWorkflowWorkerSpawnConfig, runWorkflowScript } from "./script-runtime";
+import { runWorkflowScript } from "./script-runtime";
+import { buildWorkflowWorkerSpawnConfig } from "./script-worker-spawn";
+import {
+  TEAM_READONLY_REVIEW_TEMPLATE_ID,
+  TEAM_WORKTREE_IMPLEMENTATION_TEMPLATE_ID,
+} from "./builtin-templates";
+import { getWorkflowTemplate } from "./template-store";
 import { __setWorkflowNetworkPolicyRootForTest } from "./network-policy";
 import {
   __clearWorkflowMemoryForTest,
@@ -461,6 +467,218 @@ describe("runWorkflowScript", () => {
         version: "1.0.0",
       },
     });
+  });
+
+  it("runs the built-in read-only Team review template with warning conflict synthesis", async () => {
+    const template = getWorkflowTemplate(TEAM_READONLY_REVIEW_TEMPLATE_ID);
+    expect(template).toBeTruthy();
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-built-in-team-template",
+        runSubagents: async (input) => {
+          const taskId = input.tasks[0]?.id ?? "missing";
+          const answer = taskId.endsWith("1")
+            ? {
+                question: "Should this policy be allowed?",
+                verdict: "yes",
+                summary: "Yes, it can be allowed.",
+                evidenceNotes: ["Read-only review only."],
+                risks: [],
+              }
+            : {
+                question: "Should this policy be allowed?",
+                verdict: "no",
+                summary: "No, it cannot be allowed.",
+                evidenceNotes: ["Read-only review only."],
+                risks: ["Conflicting policy interpretation."],
+              };
+          return {
+            batchId: `batch-${taskId}`,
+            results: [
+              {
+                taskId,
+                agentId: `agent-${taskId}`,
+                status: "completed",
+                answer: JSON.stringify(answer),
+                startedAt: Date.now(),
+                endedAt: Date.now(),
+              },
+            ],
+          };
+        },
+      },
+      {
+        objective: "Run built-in Team read-only review.",
+        rationale: "Verify workflow-backed Team template conflict synthesis.",
+        script: template!.script,
+        templateParams: {
+          subject: "Policy review",
+          questions: [
+            "Should this policy be allowed?",
+            "Should this policy be allowed?",
+          ],
+        },
+        templateRef: {
+          id: template!.id,
+          name: template!.name,
+          version: template!.version,
+        },
+        capabilities: template!.capabilities,
+        maxAgents: template!.maxAgents,
+        maxConcurrency: template!.maxConcurrency,
+        timeoutMs: template!.timeoutMs,
+      }
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.manifest.capabilities).toEqual(["spawn_agent", "read_files"]);
+    expect(result.returnValue).toMatchObject({
+      templateId: TEAM_READONLY_REVIEW_TEMPLATE_ID,
+      status: "warning",
+    });
+    expect((result.returnValue as { conflicts?: unknown[] }).conflicts).toHaveLength(1);
+    expect(result.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "team-readonly-review" }),
+      ])
+    );
+  });
+
+  it("runs the built-in worktree implementation Team template through merge approval", async () => {
+    const template = getWorkflowTemplate(TEAM_WORKTREE_IMPLEMENTATION_TEMPLATE_ID);
+    expect(template).toBeTruthy();
+    const approvals: string[] = [];
+    const mergeApprovals: string[] = [];
+    const cwdSeen: Array<string | undefined> = [];
+    const toolsSeen: Array<string[] | undefined> = [];
+    const calls: string[] = [];
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-built-in-worktree-team-template",
+        approveCapability: async (request) => {
+          approvals.push(request.capability);
+          return { decision: "allow" };
+        },
+        approveWorktreeMerge: async (request) => {
+          mergeApprovals.push(request.diff.stat);
+          return { decision: "allow" };
+        },
+        worktrees: {
+          async create(input) {
+            calls.push("create");
+            return {
+              id: `${input.workflowId.slice(0, 4)}-team`,
+              path: "/tmp/team-worktree",
+              branchName: "shaula-agent-workflow/test/team",
+              baseRef: input.baseRef ?? "HEAD",
+              createdAt: Date.now(),
+            };
+          },
+          async diff(worktree) {
+            calls.push(`diff:${worktree.id}`);
+            return {
+              worktreeId: worktree.id,
+              path: worktree.path,
+              branchName: worktree.branchName,
+              baseRef: worktree.baseRef,
+              diff: "diff --git a/app.ts b/app.ts\n+export const ok = true;\n",
+              stat: " app.ts | 1 +",
+              createdAt: Date.now(),
+            };
+          },
+          async merge(worktree) {
+            calls.push(`merge:${worktree.id}`);
+            return {
+              worktreeId: worktree.id,
+              path: worktree.path,
+              branchName: worktree.branchName,
+              mergedAt: Date.now(),
+              applied: true,
+            };
+          },
+        },
+        runSubagents: async (input) => {
+          const task = input.tasks[0];
+          cwdSeen.push(task?.cwd);
+          toolsSeen.push(task?.allowedTools);
+          const isVerifier = task?.id === "worktree-verifier";
+          return {
+            batchId: `batch-${task?.id ?? "missing"}`,
+            results: [
+              {
+                taskId: task?.id ?? "missing",
+                agentId: `agent-${task?.id ?? "missing"}`,
+                status: "completed",
+                answer: isVerifier
+                  ? JSON.stringify({
+                      verdict: "pass",
+                      summary: "Diff is ready to merge.",
+                      risks: [],
+                      requiredEvidence: ["diff"],
+                    })
+                  : "Implemented change inside worktree.",
+                startedAt: Date.now(),
+                endedAt: Date.now(),
+              },
+            ],
+          };
+        },
+      },
+      {
+        objective: "Run built-in worktree Team implementation.",
+        rationale: "Verify implementation Team writes through worktree and merge approval.",
+        script: template!.script,
+        templateParams: {
+          objective: "Add ok export.",
+          implementationPrompt: "Add ok export.",
+          requestMerge: true,
+          worktreeName: "team",
+        },
+        templateRef: {
+          id: template!.id,
+          name: template!.name,
+          version: template!.version,
+        },
+        capabilities: template!.capabilities,
+        maxAgents: template!.maxAgents,
+        maxConcurrency: template!.maxConcurrency,
+        timeoutMs: template!.timeoutMs,
+      }
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.manifest.capabilities).toEqual([
+      "spawn_agent",
+      "read_files",
+      "write_files",
+      "worktree",
+    ]);
+    expect(approvals).toEqual(["write_files", "worktree"]);
+    expect(cwdSeen[0]).toBe("/tmp/team-worktree");
+    expect(toolsSeen[0]).toEqual([
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "edit",
+      "write",
+      "apply_patch",
+    ]);
+    expect(mergeApprovals).toEqual([" app.ts | 1 +"]);
+    expect(calls).toContain("merge:" + result.workflowId.slice(0, 4) + "-team");
+    expect(result.returnValue).toMatchObject({
+      templateId: TEAM_WORKTREE_IMPLEMENTATION_TEMPLATE_ID,
+      status: "merged",
+      mergeRequested: true,
+      merge: { applied: true },
+    });
+    expect(result.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "team-worktree-implementation" }),
+        expect.objectContaining({ name: expect.stringMatching(/^worktree-diff:/) }),
+        expect.objectContaining({ name: expect.stringMatching(/^worktree-merge:/) }),
+      ])
+    );
   });
 
   it("does not expose Node process or require", async () => {

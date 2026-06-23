@@ -136,6 +136,8 @@ function metadataOutcome(
   if (status === "failed") return "failed";
   if (status === "timed_out") return "timed_out";
   if (status === "skipped") return "skipped";
+  const passed = evidence.metadata?.passed;
+  if (typeof passed === "boolean") return passed ? "passed" : "failed";
   const exitCode = evidence.metadata?.exitCode;
   if (typeof exitCode === "number") return exitCode === 0 ? "passed" : "failed";
   return undefined;

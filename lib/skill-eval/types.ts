@@ -32,6 +32,8 @@ export interface SkillEvalRunMetrics {
   testsRun?: string[];
   browserEvidence?: string[];
   manualIntervention?: boolean;
+  route?: string;
+  executionSemantics?: "advisory_only" | "hard_routed" | string;
 }
 
 export interface SkillEvalVersionDiff {

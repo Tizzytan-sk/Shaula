@@ -101,6 +101,9 @@ interface AnyEvent {
     toolName?: string;
     input?: Record<string, unknown>;
     ruleId?: string;
+    ruleName?: string;
+    riskCategory?: string;
+    allowRemember?: boolean;
     title?: string;
     question?: string;
     context?: string;
@@ -1060,6 +1063,9 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           toolName,
           input,
           ruleId: r.ruleId,
+          ruleName: r.ruleName,
+          riskCategory: r.riskCategory,
+          allowRemember: r.allowRemember,
           status: "pending",
           createdAt: r.createdAt,
         });

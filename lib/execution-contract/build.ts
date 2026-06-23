@@ -6,6 +6,8 @@ import {
   type ExecutionAcceptanceCriterion,
   type ExecutionBudgetHints,
   type ExecutionContract,
+  type ExecutionMainArtifact,
+  type ExecutionMainArtifactKind,
   type ExecutionStopPolicy,
 } from "./types";
 
@@ -19,6 +21,7 @@ export interface BuildExecutionContractInput {
   nonGoals?: string[];
   acceptanceCriteria?: ExecutionAcceptanceCriterion[];
   requiredEvidence?: string[];
+  mainArtifact?: string | Partial<ExecutionMainArtifact>;
   rubricProfile?: string;
   allowedCapabilities?: string[];
   budgetHints?: ExecutionBudgetHints;
@@ -39,6 +42,105 @@ function cleanList(value: unknown, fallback: string[]): string[] {
     .map((item) => cleanText(item, 500))
     .filter(Boolean)
     .slice(0, MAX_LIST_ITEMS);
+}
+
+function isMainArtifactKind(value: unknown): value is ExecutionMainArtifactKind {
+  return (
+    value === "file" ||
+    value === "directory" ||
+    value === "url" ||
+    value === "route" ||
+    value === "other"
+  );
+}
+
+function inferArtifactKind(label: string, href?: string): ExecutionMainArtifactKind {
+  const value = (href || label).trim();
+  if (/^https?:\/\//i.test(value)) return "url";
+  if (/^\/[A-Za-z0-9/_-]*$/.test(value)) return "route";
+  if (/[\\/]$/.test(value)) return "directory";
+  if (/[\\/]/.test(value) && !/\.[A-Za-z0-9]{1,12}$/.test(value)) {
+    return "directory";
+  }
+  if (/\.[A-Za-z0-9]{1,12}$/.test(value)) return "file";
+  return "other";
+}
+
+function normalizeMainArtifact(
+  raw: string | Partial<ExecutionMainArtifact> | undefined,
+  source: ExecutionMainArtifact["source"]
+): ExecutionMainArtifact | undefined {
+  if (!raw) return undefined;
+  if (typeof raw === "string") {
+    const label = cleanText(raw, 500);
+    if (!label) return undefined;
+    const href = label;
+    return {
+      kind: inferArtifactKind(label, href),
+      label,
+      href,
+      source,
+    };
+  }
+  const label =
+    cleanText(raw.label, 500) || cleanText(raw.href, 1000);
+  if (!label) return undefined;
+  const href = cleanText(raw.href, 1000) || undefined;
+  return {
+    kind: isMainArtifactKind(raw.kind)
+      ? raw.kind
+      : inferArtifactKind(label, href),
+    label,
+    ...(href ? { href } : {}),
+    source: raw.source ?? source,
+  };
+}
+
+function inferPathLikeArtifact(
+  text: string,
+  source: ExecutionMainArtifact["source"]
+): ExecutionMainArtifact | undefined {
+  const normalized = cleanText(text, 1000);
+  if (!normalized) return undefined;
+  const candidates = [
+    ...normalized.matchAll(/`([^`]+)`/g),
+  ].map((match) => match[1]);
+  const url = normalized.match(/https?:\/\/[^\s),;]+/i)?.[0];
+  if (url) candidates.unshift(url);
+  const windowsPath = normalized.match(/[A-Za-z]:[\\/][^\s),;]+/)?.[0];
+  if (windowsPath) candidates.push(windowsPath);
+  const slashPath = normalized.match(
+    /(?:\.{1,2}[\\/])?[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)+[\\/]?/,
+  )?.[0];
+  if (slashPath) candidates.push(slashPath);
+  const fileName = normalized.match(
+    /[A-Za-z0-9_.-]+\.(?:tsx?|jsx?|md|html?|css|json|ya?ml|py|cs|go|rs|java|kt|swift|vue|svelte|mjs|cjs)\b/i,
+  )?.[0];
+  if (fileName) candidates.push(fileName);
+
+  for (const candidate of candidates) {
+    const value = cleanText(candidate, 500);
+    if (!value) continue;
+    if (
+      /^https?:\/\//i.test(value) ||
+      value.includes("/") ||
+      value.includes("\\") ||
+      /\.[A-Za-z0-9]{1,12}$/.test(value)
+    ) {
+      return normalizeMainArtifact(value, source);
+    }
+  }
+  return undefined;
+}
+
+function inferMainArtifact(input: BuildExecutionContractInput): ExecutionMainArtifact | undefined {
+  return (
+    normalizeMainArtifact(input.mainArtifact, "explicit") ??
+    cleanList(input.scope, [])
+      .map((item) => inferPathLikeArtifact(item, "scope"))
+      .find(Boolean) ??
+    inferPathLikeArtifact(input.objective, "objective")
+  );
 }
 
 function stableContractId(agentId: string, objective: string, createdAt: number): string {
@@ -163,6 +265,7 @@ export function buildExecutionContract(
       input.requiredEvidence,
       defaultRequiredEvidence(rubricProfile)
     ),
+    mainArtifact: inferMainArtifact(input),
     rubricProfile,
     profileSelection: {
       source: overrideProfile ? "override" : "inferred",

@@ -99,4 +99,25 @@ describe("inferVerificationPlan", () => {
       "browser-observation",
     ]);
   });
+
+  it("passes explicit browser targets into the browser observation check", () => {
+    const plan = inferVerificationPlan({
+      objective: "Verify the app in the browser",
+      profileId: "coding.frontend-ui",
+      requiredEvidence: ["browser_observation"],
+      targetUrl: "http://127.0.0.1:3000/dashboard",
+      targetSelector: "[data-testid='dashboard-ready']",
+      targetText: "Dashboard",
+      cwd: "C:/repo",
+      createdAt: 1,
+    });
+
+    expect(plan.checks.find((check) => check.id === "browser-observation")).toMatchObject({
+      type: "browser_observation",
+      targetUrl: "http://127.0.0.1:3000/dashboard",
+      selector: "[data-testid='dashboard-ready']",
+      text: "Dashboard",
+      timeoutMs: 30_000,
+    });
+  });
 });

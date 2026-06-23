@@ -1,6 +1,7 @@
 import type {
   AgentGoal,
   GoalAcceptanceCriterion,
+  GoalCompletionClaim,
   GoalEvidence,
   GoalTurn,
 } from "./types";
@@ -22,6 +23,10 @@ import {
   blockingRequiredVerificationFailures,
   evidenceOutcome,
 } from "@/lib/verification/evidence";
+import {
+  semanticCompletionFindings,
+  type SemanticCompletionFinding,
+} from "./semantic-completion";
 
 export type GoalVerifyDecision = "accept" | "reject";
 
@@ -49,6 +54,18 @@ export interface GoalVerifyInput {
    * unresolved only if no later completed workflow supersedes them.
    */
   workflowRuns?: GoalWorkflowStatus[];
+  /**
+   * Structured completion claim submitted with `goal_update complete`. When
+   * present, the verifier checks that the proposed final handoff cites real
+   * evidence and that cited evidence covers required contract evidence.
+   */
+  completionClaim?: GoalCompletionClaim;
+  /**
+   * Formal completion attempts require a structured claim for contracted or
+   * acceptance-gated goals. Readiness checks leave this off so they can decide
+   * whether the model should be prompted to produce that claim.
+   */
+  requireCompletionClaim?: boolean;
 }
 
 export interface GoalVerifyResult {
@@ -63,6 +80,11 @@ export interface GoalVerifyResult {
    * it with a score, recommendation, and per-criterion breakdown.
    */
   evaluation: RubricEvaluation;
+}
+
+interface CompletionClaimFinding {
+  message: string;
+  evidenceIds?: string[];
 }
 
 /**
@@ -91,11 +113,24 @@ export function verifyGoalCompletion(
     contractRequiredEvidence,
     evaluationEvidence
   );
+  const semanticFindings = semanticCompletionFindings({
+    contract: input.contract,
+    evidence: evaluationEvidence,
+  });
+  const completionClaimRequired = isCompletionClaimRequired(input);
+  const completionClaimFindings = findCompletionClaimFindings({
+    claim: input.completionClaim,
+    required: completionClaimRequired,
+    evidence: evaluationEvidence,
+    requiredEvidence: contractRequiredEvidence,
+  });
   const evaluation = evaluateGoalCompletion(
     input,
     workflowRuns,
     evaluationEvidence,
-    contractCoverage
+    contractCoverage,
+    semanticFindings,
+    completionClaimFindings
   );
 
   // Rule 1: completion requires at least one piece of evidence.
@@ -117,6 +152,14 @@ export function verifyGoalCompletion(
         outcome ? ` (${outcome})` : ""
       }`
     );
+  }
+  for (const finding of semanticFindings.filter(
+    (item) => item.severity === "blocking"
+  )) {
+    missingEvidence.push(finding.message);
+  }
+  for (const finding of completionClaimFindings) {
+    missingEvidence.push(finding.message);
   }
 
   // Rule 2: completion cannot be accepted while related workflows are active.
@@ -192,6 +235,90 @@ function evaluationEvidenceFor(input: GoalVerifyInput): EvaluationEvidence[] {
   return input.evidence.map(goalEvidenceToEvaluationEvidence);
 }
 
+function findCompletionClaimFindings({
+  claim,
+  required,
+  evidence,
+  requiredEvidence,
+}: {
+  claim?: GoalCompletionClaim;
+  required: boolean;
+  evidence: EvaluationEvidence[];
+  requiredEvidence: string[];
+}): CompletionClaimFinding[] {
+  const findings: CompletionClaimFinding[] = [];
+  if (!claim) {
+    if (required) {
+      findings.push({
+        message:
+          "Structured final summary is required for contracted or acceptance-gated goals; include finalSummary and evidenceIds that cite recorded evidence.",
+      });
+    }
+    return findings;
+  }
+  const finalSummary = claim.finalSummary.trim();
+  const evidenceIds = normalizedClaimEvidenceIds(claim);
+  const evidenceById = new Map(evidence.map((item) => [item.id, item]));
+
+  if (!finalSummary) {
+    findings.push({
+      message:
+        "Structured final summary is empty; include the actual handoff summary before completing.",
+    });
+  }
+  if (evidenceIds.length === 0) {
+    findings.push({
+      message:
+        "Structured final summary must cite at least one recorded evidence id.",
+    });
+    return findings;
+  }
+
+  const unknown = evidenceIds.filter((id) => !evidenceById.has(id));
+  for (const id of unknown) {
+    findings.push({
+      message: `Structured final summary cites unknown evidence id: ${id}.`,
+      evidenceIds: [id],
+    });
+  }
+
+  const citedEvidence = evidenceIds
+    .map((id) => evidenceById.get(id))
+    .filter((item): item is EvaluationEvidence => Boolean(item));
+  if (requiredEvidence.length > 0 && citedEvidence.length > 0) {
+    const citedCoverage = requiredEvidenceCoverage(
+      requiredEvidence,
+      citedEvidence
+    );
+    if (citedCoverage.missing.length > 0) {
+      findings.push({
+        message: `Structured final summary does not cite evidence covering required evidence: ${citedCoverage.missing.join(", ")}.`,
+        evidenceIds: citedEvidence.map((item) => item.id),
+      });
+    }
+  }
+
+  return findings;
+}
+
+function isCompletionClaimRequired(input: GoalVerifyInput): boolean {
+  return (
+    input.requireCompletionClaim === true &&
+    (Boolean(input.contract) || Boolean(input.goal.acceptanceCriteria?.length))
+  );
+}
+
+function normalizedClaimEvidenceIds(claim: GoalCompletionClaim): string[] {
+  return [
+    ...new Set(
+      claim.evidenceIds
+        .map((id) => id.trim())
+        .filter(Boolean)
+        .slice(0, 50)
+    ),
+  ];
+}
+
 function unmetRequiredCriteria(
   criteria?: GoalAcceptanceCriterion[]
 ): GoalAcceptanceCriterion[] {
@@ -209,15 +336,18 @@ function evaluateGoalCompletion(
   input: GoalVerifyInput,
   workflowRuns: GoalWorkflowStatus[],
   evaluationEvidence: EvaluationEvidence[],
-  contractCoverage: RequiredEvidenceCoverage
+  contractCoverage: RequiredEvidenceCoverage,
+  semanticFindings: SemanticCompletionFinding[],
+  completionClaimFindings: CompletionClaimFinding[]
 ): RubricEvaluation {
   const { rubric, scores } = goalRubricInput(
     input,
     workflowRuns,
     evaluationEvidence,
-    contractCoverage
+    contractCoverage,
+    completionClaimFindings
   );
-  return evaluateRubric({
+  const evaluation = evaluateRubric({
     rubric,
     subject: {},
     criteria: scores,
@@ -225,22 +355,43 @@ function evaluateGoalCompletion(
     repeatedBlockerCount: repeatedBlockedTurns(input.turns),
     createdAt: Date.now(),
   });
+  const reviewFindings = semanticFindings.filter((item) => item.severity === "review");
+  if (reviewFindings.length === 0) return evaluation;
+  return {
+    ...evaluation,
+    status: evaluation.status === "passed" ? "warning" : evaluation.status,
+    recommendation:
+      evaluation.recommendation === "pass" ? "iterate" : evaluation.recommendation,
+    nextAction:
+      evaluation.recommendation === "pass"
+        ? "Review flagged semantic completion issues."
+        : evaluation.nextAction,
+    triggeredPitfalls: [
+      ...evaluation.triggeredPitfalls,
+      ...reviewFindings.map((item) => item.message),
+    ],
+  };
 }
 
 function goalRubricInput(
   input: GoalVerifyInput,
   workflowRuns: GoalWorkflowStatus[],
   evaluationEvidence: EvaluationEvidence[],
-  contractCoverage: RequiredEvidenceCoverage
+  contractCoverage: RequiredEvidenceCoverage,
+  completionClaimFindings: CompletionClaimFinding[]
 ): { rubric: RubricSpec; scores: CriterionScoreInput[] } {
   const contractRequiredEvidence = input.contract?.requiredEvidence ?? [];
   const evidenceIds = evaluationEvidence.map((item) => item.id);
+  const completionClaimRequired = isCompletionClaimRequired(input);
   const matchedEvidenceIds =
     contractCoverage.matchedEvidenceIds.length > 0
       ? contractCoverage.matchedEvidenceIds
       : evidenceIds;
   const hasEvidence = input.evidence.length > 0 || evaluationEvidence.length > 0;
   const hasRequiredEvidence = contractCoverage.missing.length === 0;
+  const completionClaimEvidenceIds = input.completionClaim
+    ? normalizedClaimEvidenceIds(input.completionClaim)
+    : [];
   const criteria: RubricCriterion[] = [
     {
       id: "goal-evidence",
@@ -265,6 +416,21 @@ function goalRubricInput(
       hardFail: true,
     },
   ];
+  if (completionClaimRequired || input.completionClaim) {
+    criteria.push({
+      id: "final-summary-evidence",
+      dimensionId: "evidence_traceability",
+      importance: "essential",
+      description:
+        "The structured final summary must cite recorded evidence that supports the completion claim.",
+      evidenceRequired:
+        contractRequiredEvidence.length > 0
+          ? contractRequiredEvidence
+          : ["goal_evidence"],
+      minEvidenceTrust: "agent_reported",
+      hardFail: true,
+    });
+  }
   for (const criterion of input.goal.acceptanceCriteria ?? []) {
     criteria.push({
       id: `acceptance:${criterion.id}`,
@@ -312,6 +478,20 @@ function goalRubricInput(
           : "No active or unresolved workflow runs.",
     },
   ];
+  if (completionClaimRequired || input.completionClaim) {
+    scores.push({
+      criterionId: "final-summary-evidence",
+      status: completionClaimFindings.length === 0 ? "pass" : "fail",
+      reason:
+        completionClaimFindings.length === 0
+          ? "Structured final summary cites recorded evidence that supports the completion claim."
+          : completionClaimFindings.map((item) => item.message).join(" "),
+      evidenceIds:
+        completionClaimEvidenceIds.length > 0
+          ? completionClaimEvidenceIds
+          : undefined,
+    });
+  }
   for (const criterion of input.goal.acceptanceCriteria ?? []) {
     scores.push({
       criterionId: `acceptance:${criterion.id}`,

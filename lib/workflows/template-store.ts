@@ -8,6 +8,10 @@ import type {
   WorkflowTemplate,
   WorkflowTemplateSummary,
 } from "./types";
+import {
+  BUILTIN_WORKFLOW_TEMPLATES,
+  getBuiltinWorkflowTemplate,
+} from "./builtin-templates";
 
 const WORKFLOW_TEMPLATE_SCHEMA_VERSION = 1;
 const MAX_TEMPLATE_SCRIPT_CHARS = 100_000;
@@ -198,7 +202,9 @@ export function getWorkflowTemplate(id: string): WorkflowTemplate | undefined {
     const parsed = JSON.parse(fs.readFileSync(templateFilePath(id), "utf8"));
     return parsePersisted(parsed) ?? undefined;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return getBuiltinWorkflowTemplate(sanitizeTemplateId(id));
+    }
     throw err;
   }
 }
@@ -208,10 +214,10 @@ export function listWorkflowTemplates(): WorkflowTemplateSummary[] {
   try {
     files = fs.readdirSync(templatesDir());
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw err;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") files = [];
+    else throw err;
   }
-  return files
+  const userTemplates = files
     .filter((file) => file.endsWith(".json"))
     .map((file) => {
       try {
@@ -223,7 +229,15 @@ export function listWorkflowTemplates(): WorkflowTemplateSummary[] {
         return null;
       }
     })
-    .filter((template): template is WorkflowTemplate => Boolean(template))
+    .filter((template): template is WorkflowTemplate => Boolean(template));
+  const byId = new Map<string, WorkflowTemplate>();
+  for (const template of BUILTIN_WORKFLOW_TEMPLATES) {
+    byId.set(template.id, template);
+  }
+  for (const template of userTemplates) {
+    byId.set(template.id, template);
+  }
+  return Array.from(byId.values())
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .map(summary);
 }

@@ -13,6 +13,7 @@
  */
 import { NextResponse } from "next/server";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { assertApiAccess } from "@/lib/api-boundary";
 import { findSessionPathById, getSessionDetail } from "@/lib/sessions";
 
 export const runtime = "nodejs";
@@ -22,6 +23,8 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const { id } = await params;
   try {
     const body = (await req.json().catch(() => ({}))) as {

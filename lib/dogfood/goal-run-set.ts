@@ -1,5 +1,6 @@
 import type { EvaluationAction } from "@/lib/evaluation-actions/types";
 import type { EvaluationEvidence } from "@/lib/evaluation/types";
+import { evidenceRefToEvaluationEvidence } from "@/lib/evidence/ledger";
 import { evaluateGoalRunClosure } from "@/lib/goal/closure";
 import type {
   AgentGoal,
@@ -7,11 +8,14 @@ import type {
   GoalRunClosureVerdict,
 } from "@/lib/goal/types";
 import { verifyGoalCompletion } from "@/lib/goal/verifier";
+import { commandResultToEvidenceRef } from "@/lib/verification/evidence";
+import type { VerificationCommandResult } from "@/lib/verification/types";
 
 export type DogfoodGoalCaseId =
   | "code-change-success"
   | "ui-check-success"
   | "verifier-rejection"
+  | "failed-required-check"
   | "needs-user-pause"
   | "blocked-pause";
 
@@ -34,6 +38,7 @@ export interface DogfoodGoalRunRecord {
     kind: string;
     trustLevel?: string;
     outcome?: string;
+    metadata?: Record<string, unknown>;
   }>;
   missingEvidence: string[];
   openActionCount: number;
@@ -94,6 +99,7 @@ export function runLocalGoalDogfoodSet(
         kind: item.kind,
         trustLevel: item.trustLevel,
         outcome: item.outcome,
+        metadata: item.metadata,
       })),
       missingEvidence: closure.missingEvidence,
       openActionCount: closure.openActions.length,
@@ -123,13 +129,12 @@ function dogfoodCaseDefinitions(
       ],
       evaluationEvidence: [
         evalEvidence("diff-evidence", "diff", "Code diff recorded", "deterministic_check", createdAt),
-        evalEvidence(
+        verificationTestEvidence(
           "test-evidence",
-          "test_result",
           "Targeted tests passed",
-          "deterministic_check",
           createdAt,
-          "passed"
+          "passed",
+          0
         ),
       ],
       notes: "Represents a normal scoped code task after evidence has been collected.",
@@ -168,6 +173,29 @@ function dogfoodCaseDefinitions(
         action(agentId, "missing_evidence", "Collect test_result evidence", "Run the required verification check.", createdAt),
       ],
       notes: "Captures fake completion resistance and conversion into a next action.",
+    },
+    {
+      id: "failed-required-check",
+      title: "Failed required check blocks completion",
+      objective: "Reject completion when the required test check has failed.",
+      expectedVerdict: "continue",
+      requiredEvidence: ["test_result"],
+      evidence: [
+        goalEvidence("failed-test-evidence", "test", "Targeted tests failed", createdAt),
+      ],
+      evaluationEvidence: [
+        verificationTestEvidence(
+          "failed-test-evidence",
+          "Targeted tests failed",
+          createdAt,
+          "failed",
+          1
+        ),
+      ],
+      openActions: [
+        action(agentId, "failed_criterion", "Fix failed test_result evidence", "Repair the failing check and rerun verification.", createdAt),
+      ],
+      notes: "Captures the boundary between missing evidence and actively failed deterministic evidence.",
     },
     {
       id: "needs-user-pause",
@@ -259,6 +287,37 @@ function evalEvidence(
     outcome,
     createdAt,
   };
+}
+
+function verificationTestEvidence(
+  id: string,
+  title: string,
+  createdAt: number,
+  status: VerificationCommandResult["status"],
+  exitCode: number
+): EvaluationEvidence {
+  return evidenceRefToEvaluationEvidence(
+    commandResultToEvidenceRef(
+      {
+        planId: "dogfood-plan",
+        commandId: "npm-test",
+        kind: "test",
+        label: title,
+        command: "npm",
+        args: ["test", "--", "dogfood"],
+        cwd: "/tmp/shaula-dogfood",
+        required: true,
+        evidenceRequired: ["test_result"],
+        status,
+        exitCode,
+        stdoutPreview: status === "passed" ? "tests passed" : "1 failing test",
+        durationMs: 42,
+        startedAt: createdAt - 42,
+        completedAt: createdAt,
+      },
+      { id, createdAt }
+    )
+  );
 }
 
 function action(

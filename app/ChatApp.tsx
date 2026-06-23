@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  startTransition,
   useCallback,
   useEffect,
   useMemo,
@@ -16,7 +15,6 @@ import {
   updateInput as storeUpdateInput,
   deleteInput as deleteStoreInput,
 } from "@/lib/composer/input-store";
-import { ArrowDown, CheckCircle2, Download, FileText, Loader2, RotateCcw, X } from "lucide-react";
 import type {
   SessionInfoLite,
   ChatMessage,
@@ -27,7 +25,6 @@ import type {
 import type {
   WorkflowDebugBundle,
   WorkflowResumeSnapshot,
-  WorkflowTraceEvent,
 } from "@/lib/workflows/types";
 import type { BrowserAnnotation } from "@/lib/browser/types";
 import type { AgentProgress } from "@/lib/progress/types";
@@ -71,12 +68,15 @@ import { useSessionMeta } from "./hooks/useSessionMeta";
 import { useSearch } from "./hooks/useSearch";
 import { useProviderModel } from "./hooks/useProviderModel";
 import { useChatModalsState } from "./hooks/useChatModalsState";
+import { useWorkbenchController } from "./hooks/useWorkbenchController";
+import { useComposerHistoryController } from "./hooks/useComposerHistoryController";
+import { useSessionSwitchingController } from "./hooks/useSessionSwitchingController";
 import { loadCollabSettings } from "@/lib/collab/settings";
 import { useAutocomplete } from "./hooks/useAutocomplete";
 import { useMessageRefs } from "./ChatMinimap";
 import { EmptyState } from "./components/EmptyState";
 import { Composer } from "./components/Composer";
-import { DropOverlay } from "./components/DropOverlay";
+import { ChatAppShell } from "./components/ChatAppShell";
 import { Sidebar } from "./components/Sidebar";
 import { SidebarSearch } from "./components/SidebarSearch";
 import { TopHeader } from "./components/TopHeader";
@@ -84,12 +84,18 @@ import { MessagesScrollArea } from "./components/MessagesScrollArea";
 import type { WorkflowWorktreeAction } from "./components/MessageView";
 import {
   WorkbenchSidebar,
-  type WorkbenchView,
 } from "./components/WorkbenchSidebar";
-import type { FilesLayout } from "./components/RightPanelContainer";
+import {
+  formatWorkflowResumeSummaries,
+  WorkflowHistoryPanel,
+} from "./components/WorkflowHistoryPanel";
+import {
+  SessionLoadingState,
+  UpdateLatestNotice,
+  UpdateNotice,
+} from "./components/ChatStatusOverlays";
 import { ChatModals } from "./components/ChatModals";
 import { BudgetExceededModal } from "./components/BudgetExceededModal";
-import { Button, TokenIconButton } from "./components/DesignPrimitives";
 import { resolveRuntimeIdentity } from "@/lib/runtime/identity";
 
 interface Props {
@@ -98,35 +104,8 @@ interface Props {
 }
 
 type Theme = "dark" | "light";
-const INPUT_HISTORY_KEY = "shaula:composer:history:v1";
-const INPUT_HISTORY_LIMIT = 100;
 
 // SLASH_COMMANDS / SlashName / detectAutocompleteToken 已搬到 hooks/useAutocomplete.ts（RFC-1 阶段 C2）。
-
-function formatWorkflowTime(ms: number | undefined): string {
-  if (!ms) return "";
-  try {
-    return new Date(ms).toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return "";
-  }
-}
-
-function shortWorkflowJson(value: unknown, maxChars = 5000): string {
-  try {
-    const text =
-      typeof value === "string" ? value : JSON.stringify(value, null, 2);
-    if (!text) return "(empty)";
-    return text.length > maxChars ? `${text.slice(0, maxChars)}...` : text;
-  } catch {
-    return String(value);
-  }
-}
 
 function extractSessionIdFromPath(p: string | null | undefined): string | null {
   if (!p) return null;
@@ -179,529 +158,10 @@ function progressWithRuntimeFallback(
   };
 }
 
-function workflowTraceSummary(event: WorkflowTraceEvent): string {
-  switch (event.type) {
-    case "agent_start":
-      return [
-        event.title,
-        event.agentType ? `type=${event.agentType}` : "",
-        event.role ? `role=${event.role}` : "",
-        event.isolation ? `isolation=${event.isolation}` : "",
-      ]
-        .filter(Boolean)
-        .join(" · ");
-    case "agent_end":
-      return [
-        event.title,
-        `status=${event.status}`,
-        event.schemaValid === undefined ? "" : `schema=${event.schemaValid}`,
-        event.error ?? "",
-      ]
-        .filter(Boolean)
-        .join(" · ");
-    case "schema_validation":
-      return event.valid ? "schema valid" : event.errors.join("; ");
-    case "approval":
-      return `${event.capability} · ${event.decision}`;
-    default:
-      return shortWorkflowJson(event, 800);
-  }
-}
-
-function UpdateNotice({
-  onView,
-  onClose,
-}: {
-  state: UpdateState;
-  onView: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div className="absolute right-4 top-12 z-40 w-[300px] rounded-token-lg border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-2.5 text-[color:var(--text)] shadow-popover">
-      <div className="flex items-start gap-3">
-        <span className="mt-0.5 inline-flex h-[var(--control-sm)] w-[var(--control-sm)] shrink-0 items-center justify-center rounded-token border border-[color:var(--color-info)] bg-[color:var(--color-info-bg)] text-[color:var(--color-info)]">
-          <Download size={15} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="text-token-ui font-semibold">
-            Shaula 有可用更新
-          </div>
-          <div className="mt-0.5 text-token-sm text-[color:var(--text-muted)]">
-            安装后可以使用最新能力。
-          </div>
-          <div className="mt-2 flex items-center gap-2">
-            <Button
-              onClick={onView}
-              tone="info"
-              variant="soft"
-              size="sm"
-              leading={<Download size={13} />}
-            >
-              查看
-            </Button>
-          </div>
-        </div>
-        <TokenIconButton
-          onClick={onClose}
-          icon={<X size={14} />}
-          size="xs"
-          variant="ghost"
-          title="关闭"
-          aria-label="关闭更新提醒"
-        />
-      </div>
-    </div>
-  );
-}
-
-function UpdateLatestNotice({
-  onClose,
-}: {
-  state: UpdateState;
-  onClose: () => void;
-}) {
-  return (
-    <div className="absolute right-4 top-12 z-40 w-[300px] rounded-token-lg border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-2.5 text-[color:var(--text)] shadow-popover">
-      <div className="flex items-start gap-3">
-        <span className="mt-0.5 inline-flex h-[var(--control-sm)] w-[var(--control-sm)] shrink-0 items-center justify-center rounded-token border border-[color:var(--color-success)] bg-[color:var(--color-success-bg)] text-[color:var(--color-success)]">
-          <CheckCircle2 size={15} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="text-token-ui font-semibold">Shaula 已是最新</div>
-          <div className="mt-0.5 text-token-sm text-[color:var(--text-muted)]">
-            现在可以继续工作。
-          </div>
-        </div>
-        <TokenIconButton
-          onClick={onClose}
-          icon={<X size={14} />}
-          size="xs"
-          variant="ghost"
-          title="关闭"
-          aria-label="关闭更新状态提示"
-        />
-      </div>
-    </div>
-  );
-}
-
-function SessionLoadingState({
-  session,
-}: {
-  session: SessionInfoLite | null;
-}) {
-  return (
-    <div className="flex flex-1 items-center justify-center px-6">
-      <div className="flex max-w-sm flex-col items-center text-center">
-        <Loader2
-          size={22}
-          className="mb-3 animate-spin text-[color:var(--accent)]"
-        />
-        <div className="text-token-ui font-semibold text-[color:var(--text)]">
-          正在打开任务
-        </div>
-        <div className="mt-1 max-w-[320px] truncate text-token-sm text-[color:var(--text-muted)]">
-          {session?.meta?.title || session?.name || session?.firstMessage || "加载历史上下文"}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function formatWorkflowResumeSummaries(
-  snapshot: WorkflowResumeSnapshot | undefined,
-  checkpointName: string | undefined
-): string[] {
-  if (!snapshot) return [];
-  const selectedCheckpoint = checkpointName
-    ? snapshot.checkpointSummaries.find((item) => item.name === checkpointName)
-    : snapshot.checkpointSummaries.at(-1);
-  const checkpointSummaries = snapshot.checkpointSummaries.slice(-5);
-  const artifactSummaries = snapshot.artifactSummaries.slice(-5);
-  const lines: string[] = [];
-  if (selectedCheckpoint) {
-    lines.push(
-      "Selected checkpoint preview:",
-      `- ${selectedCheckpoint.name}: ${selectedCheckpoint.preview || "(empty)"}`
-    );
-  }
-  if (checkpointSummaries.length > 0) {
-    lines.push(
-      "",
-      "Recent checkpoints:",
-      ...checkpointSummaries.map(
-        (item) => `- ${item.name}: ${item.preview || "(empty)"}`
-      )
-    );
-  }
-  if (artifactSummaries.length > 0) {
-    lines.push(
-      "",
-      "Recent artifacts:",
-      ...artifactSummaries.map(
-        (item) => `- ${item.name}: ${item.preview || "(empty)"}`
-      )
-    );
-  }
-  return lines;
-}
-
-function WorkflowDebugInspector({
-  bundle,
-  loading,
-  error,
-  onClose,
-}: {
-  bundle: WorkflowDebugBundle | null;
-  loading: boolean;
-  error: string | null;
-  onClose: () => void;
-}) {
-  return (
-    <aside
-      className="min-h-0 overflow-auto border-t p-3 md:border-l md:border-t-0"
-      style={{ borderColor: "var(--border)" }}
-    >
-      <div className="mb-3 flex items-center gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">Workflow inspector</div>
-          <div className="truncate text-token-xs text-[color:var(--text-muted)]">
-            Trace, logs, artifacts, checkpoints, and script
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="inline-flex h-7 w-7 items-center justify-center rounded border"
-          style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
-          aria-label="Close workflow inspector"
-          title="Close inspector"
-        >
-          <X size={14} />
-        </button>
-      </div>
-      {loading ? (
-        <div className="flex h-32 items-center justify-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>
-          <Loader2 size={15} className="animate-spin" />
-          Loading debug bundle
-        </div>
-      ) : error ? (
-        <div className="rounded-token border border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] px-3 py-2 text-token-sm text-[color:var(--color-danger)]">
-          {error}
-        </div>
-      ) : !bundle ? (
-        <div className="flex h-32 items-center justify-center text-sm" style={{ color: "var(--text-muted)" }}>
-          Select a workflow to inspect
-        </div>
-      ) : (
-        <div className="space-y-3 text-token-sm">
-          <section className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-subtle)] px-3 py-2">
-            <div className="truncate font-semibold">{bundle.workflow.objective}</div>
-            <div className="mt-1 grid gap-1 text-token-xs text-[color:var(--text-muted)]">
-              <span>{bundle.workflow.status} · {formatWorkflowTime(bundle.workflow.createdAt)}</span>
-              <span>
-                {bundle.counts.traceEvents} trace · {bundle.counts.logs} logs · {bundle.counts.artifacts} artifacts · {bundle.counts.checkpoints} checkpoints
-              </span>
-              <span>Capabilities: {bundle.workflow.manifest.capabilities.join(", ")}</span>
-            </div>
-          </section>
-
-          <section className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-subtle)] px-3 py-2">
-            <div className="mb-1 font-semibold">Trace</div>
-            {bundle.traceEvents.length ? (
-              <div className="space-y-1">
-                {bundle.traceEvents.map((event, index) => (
-                  <div key={`${event.type}-${index}`} className="rounded-token-sm border border-[color:var(--border-soft)] px-2 py-1">
-                    <div className="flex gap-2">
-                      <span className="shrink-0 font-medium">{event.type}</span>
-                      <span className="min-w-0 truncate text-[color:var(--text-muted)]">
-                        {workflowTraceSummary(event)}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 text-token-xs text-[color:var(--text-muted)]">
-                      {formatWorkflowTime(event.createdAt)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-[color:var(--text-muted)]">No trace events</div>
-            )}
-          </section>
-
-          {bundle.logs.length > 0 && (
-            <section className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-subtle)] px-3 py-2">
-              <div className="mb-1 font-semibold">Logs</div>
-              <div className="space-y-1">
-                {bundle.logs.slice(-20).map((log, index) => (
-                  <div key={index} className="text-[color:var(--text-muted)]">
-                    [{log.level}] {log.message}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          <section className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-subtle)] px-3 py-2">
-            <div className="mb-1 font-semibold">Artifacts & checkpoints</div>
-            {[...bundle.artifacts, ...bundle.checkpoints].length ? (
-              <div className="space-y-1">
-                {[...bundle.artifacts, ...bundle.checkpoints].slice(-12).map((item, index) => (
-                  <details key={`${item.name}-${index}`}>
-                    <summary className="cursor-pointer list-none truncate [&::-webkit-details-marker]:hidden">
-                      {item.name}
-                    </summary>
-                    <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap text-token-xs text-[color:var(--text-muted)]">
-                      {shortWorkflowJson(item.value)}
-                    </pre>
-                  </details>
-                ))}
-              </div>
-            ) : (
-              <div className="text-[color:var(--text-muted)]">No artifacts or checkpoints</div>
-            )}
-          </section>
-
-          <details className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-subtle)] px-3 py-2">
-            <summary className="cursor-pointer list-none font-semibold [&::-webkit-details-marker]:hidden">
-              Script
-            </summary>
-            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-token-xs text-[color:var(--text-muted)]">
-              {bundle.script}
-            </pre>
-          </details>
-        </div>
-      )}
-    </aside>
-  );
-}
-
-function WorkflowHistoryPanel({
-  items,
-  loading,
-  debugBundle,
-  debugLoading,
-  debugError,
-  onRefresh,
-  onClose,
-  onResume,
-  onInspect,
-  onCloseInspector,
-}: {
-  items: WorkflowResumeSnapshot[];
-  loading: boolean;
-  debugBundle: WorkflowDebugBundle | null;
-  debugLoading: boolean;
-  debugError: string | null;
-  onRefresh: () => void | Promise<void>;
-  onClose: () => void;
-  onResume: (snapshot: WorkflowResumeSnapshot, checkpointName?: string) => void;
-  onInspect: (snapshot: WorkflowResumeSnapshot) => void | Promise<void>;
-  onCloseInspector: () => void;
-}) {
-  const visible = items.slice(0, 50);
-  const [selectedCheckpoints, setSelectedCheckpoints] = useState<
-    Record<string, string>
-  >({});
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-12"
-      style={{ background: "var(--color-overlay)" }}
-    >
-      <div
-        className="flex max-h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border shadow-2xl"
-        style={{
-          borderColor: "var(--border)",
-          background: "var(--bg-panel)",
-          color: "var(--text)",
-        }}
-      >
-        <div
-          className="flex h-11 items-center gap-2 border-b px-3"
-          style={{ borderColor: "var(--border)" }}
-        >
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold">Workflow history</div>
-            <div className="truncate text-token-xs" style={{ color: "var(--text-muted)" }}>
-              Resume from persisted checkpoints and artifacts
-            </div>
-          </div>
-          <button
-            type="button"
-            disabled={loading}
-            onClick={() => void onRefresh()}
-            className="inline-flex h-7 items-center gap-1 rounded border px-2 text-xs disabled:opacity-50"
-            style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
-          >
-            {loading ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
-            Refresh
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-7 w-7 items-center justify-center rounded border"
-            style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
-            aria-label="Close workflow history"
-            title="Close"
-          >
-            <X size={14} />
-          </button>
-        </div>
-        <div className="grid min-h-0 flex-1 md:grid-cols-[minmax(0,1fr)_minmax(360px,0.9fr)]">
-          <div className="min-h-0 overflow-auto p-2">
-            {loading && visible.length === 0 ? (
-              <div className="flex h-32 items-center justify-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>
-                <Loader2 size={15} className="animate-spin" />
-                Loading workflows
-              </div>
-            ) : visible.length === 0 ? (
-              <div className="flex h-32 items-center justify-center text-sm" style={{ color: "var(--text-muted)" }}>
-                No resumable workflow history yet
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                {visible.map((item) => (
-                  <div
-                    key={item.workflowId}
-                    className="rounded border px-3 py-2"
-                    style={{
-                      borderColor: "var(--border-soft)",
-                      background: "color-mix(in srgb, var(--text) 2%, transparent)",
-                    }}
-                  >
-                    <div className="flex items-start gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium">
-                        {item.objective || item.workflowId}
-                      </div>
-                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
-                        <span>{item.status}</span>
-                        <span>{item.checkpointNames.length} checkpoints</span>
-                        <span>{item.artifactNames.length} artifacts</span>
-                        {item.lastCheckpoint ? (
-                          <span>Latest: {item.lastCheckpoint.name}</span>
-                        ) : null}
-                        <span>{formatWorkflowTime(item.lastCheckpoint?.createdAt)}</span>
-                      </div>
-                      {!item.canResume && item.reason ? (
-                        <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
-                          {item.reason}
-                        </div>
-                      ) : null}
-                      {item.canResume && item.checkpointNames.length > 1 ? (
-                        <label className="mt-2 flex max-w-sm items-center gap-2 text-token-xs" style={{ color: "var(--text-muted)" }}>
-                          <span className="shrink-0">Checkpoint</span>
-                          <select
-                            value={
-                              selectedCheckpoints[item.workflowId] ??
-                              item.lastCheckpoint?.name ??
-                              item.checkpointNames[item.checkpointNames.length - 1] ??
-                              ""
-                            }
-                            onChange={(event) =>
-                              setSelectedCheckpoints((cur) => ({
-                                ...cur,
-                                [item.workflowId]: event.target.value,
-                              }))
-                            }
-                            className="min-w-0 flex-1 rounded border bg-transparent px-2 py-1 text-token-xs outline-none"
-                            style={{
-                              borderColor: "var(--border-soft)",
-                              color: "var(--text)",
-                            }}
-                          >
-                            {item.checkpointNames.map((name) => (
-                              <option key={name} value={name}>
-                                {name}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      ) : null}
-                      {(item.checkpointSummaries.at(-1)?.preview ||
-                        item.artifactSummaries.at(-1)?.preview) && (
-                        <div
-                          className="mt-2 line-clamp-2 text-token-xs"
-                          style={{ color: "var(--text-muted)" }}
-                          title={
-                            item.checkpointSummaries.at(-1)?.preview ??
-                            item.artifactSummaries.at(-1)?.preview
-                          }
-                        >
-                          {item.checkpointSummaries.at(-1)?.preview ??
-                            item.artifactSummaries.at(-1)?.preview}
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex shrink-0 flex-col gap-1">
-                      <button
-                        type="button"
-                        onClick={() => void onInspect(item)}
-                        className="inline-flex h-7 items-center gap-1 rounded border px-2 text-xs"
-                        style={{
-                          borderColor: "var(--border-soft)",
-                          color: "var(--text-muted)",
-                        }}
-                      >
-                        <FileText size={13} />
-                        Inspect
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!item.canResume}
-                        onClick={() =>
-                          onResume(
-                            item,
-                            selectedCheckpoints[item.workflowId] ??
-                              item.lastCheckpoint?.name
-                          )
-                        }
-                        className="inline-flex h-7 items-center gap-1 rounded border px-2 text-xs disabled:cursor-not-allowed disabled:opacity-45"
-                        style={{
-                          borderColor: "var(--border-soft)",
-                          color: item.canResume ? "var(--text)" : "var(--text-muted)",
-                        }}
-                      >
-                        <RotateCcw size={13} />
-                        Resume
-                      </button>
-                    </div>
-                  </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <WorkflowDebugInspector
-            bundle={debugBundle}
-            loading={debugLoading}
-            error={debugError}
-            onClose={onCloseInspector}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // setError 需要在 useSessions（B1）之前声明，作为 onError 回调注入。
   // 顶层 error 用于 UI banner 展示；useState setter 身份稳定，可安全提前。
   const [error, setError] = useState<string | null>(null);
-  const [inputHistory, setInputHistory] = useState<string[]>(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const raw = localStorage.getItem(INPUT_HISTORY_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed)
-        ? parsed.filter((x): x is string => typeof x === "string")
-        : [];
-    } catch {
-      return [];
-    }
-  });
-  const historyCursorRef = useRef<number | null>(null);
-  const historyDraftRef = useRef("");
 
   // ===== 多会话核心容器与 SSE 连接池（RFC-1 阶段 A1 + A2） =====
   // - runnersRef（useRunners）：所有会话工作面的"权威存储"
@@ -930,180 +390,23 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     apply();
   };
 
-  const initialWorkbenchView = (): WorkbenchView => {
-    if (typeof window === "undefined") return { type: "overview" };
-    if (window.location.search.includes("e2e=1")) return { type: "overview" };
-    try {
-      const stored = localStorage.getItem("pi-workbench-view");
-      if (
-        stored === "overview" ||
-        stored === "progress" ||
-        stored === "outputs" ||
-        stored === "files" ||
-        stored === "context" ||
-        stored === "browser"
-      ) {
-        return { type: stored };
-      }
-      const legacy = localStorage.getItem("pi-right-panel");
-      if (legacy === "files" || localStorage.getItem("pi-show-files") === "1") {
-        return { type: "files" };
-      }
-      if (legacy === "browser") return { type: "browser" };
-    } catch {
-      /* noop */
-    }
-    return { type: "overview" };
-  };
-  const initialWorkbenchOpen = (): boolean => {
-    if (typeof window === "undefined") return false;
-    if (window.location.search.includes("e2e=1")) return false;
-    try {
-      const stored = localStorage.getItem("pi-workbench-open");
-      if (stored === "1") return true;
-      if (stored === "0") return false;
-      const legacy = localStorage.getItem("pi-right-panel");
-      return (
-        legacy === "files" ||
-        legacy === "browser" ||
-        localStorage.getItem("pi-show-files") === "1"
-      );
-    } catch {
-      return false;
-    }
-  };
-  const [workbenchOpen, setWorkbenchOpen] = useState(false);
-  const [workbenchView, setWorkbenchView] = useState<WorkbenchView>({
-    type: "overview",
-  });
+  const {
+    workbenchOpen,
+    workbenchView,
+    browserOpenRequest,
+    sidebarOpen,
+    filesLayout,
+    filesContainerWidth,
+    rightPanelResizing,
+    setFilesLayout,
+    openWorkbench,
+    closeWorkbench,
+    toggleWorkbench,
+    toggleSidebar,
+    onSplitterMouseDown,
+  } = useWorkbenchController();
   const [showSkills, setShowSkills] = useState(false);
   const [showTools, setShowTools] = useState(false);
-  const [browserOpenRequest, setBrowserOpenRequest] = useState<{
-    id: number;
-    url: string;
-  } | null>(null);
-
-  // sidebar 开合－— 提前声明供右侧面板宽度计算使用
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const COMPACT_WORKBENCH_BREAKPOINT = 720;
-
-  // 右侧 panel 宽度（仅 files/tools 用 inline 形态需要，skills 是 modal）
-  const [rightPanelWidth, setRightPanelWidth] = useState(480);
-  /** FileBrowser 内部折叠状态:不再影响外层宽度,仅 56px 极窄态特殊处理
-   *  (FileBrowser 内部用 flex:1 自适应,外层一直用 rightPanelWidth) */
-  const [filesLayout, setFilesLayout] = useState<FilesLayout>({
-    treeCollapsed: false,
-    viewerHidden: false,
-  });
-  useEffect(() => {
-    queueMicrotask(() => {
-      const compactViewport = window.innerWidth < COMPACT_WORKBENCH_BREAKPOINT;
-      const view = initialWorkbenchView();
-      setWorkbenchView(view);
-      setWorkbenchOpen(compactViewport ? false : initialWorkbenchOpen());
-      if (compactViewport) setSidebarOpen(false);
-      try {
-        const stored = localStorage.getItem("rightPanelWidth");
-        const n = stored ? Number(stored) : NaN;
-        if (!compactViewport && Number.isFinite(n) && n >= 320) {
-          // 注水时就拿当前 viewport / sidebar 状态下的 max 做一次 clamp，
-          // 避免“stored 是上次大窗口里拖出的 1100”在小窗口里首帧先
-          // 按 1100 画一下、下一帧才被 clamp 压回。
-          // 这里重新计算 max，不能用闭包里的 rightPanelMaxWidth（那个
-          // 依赖于 viewportWidth state，本函数体是首载时调的）。
-          const liveSidebarWidth = 260;
-          const liveMax = Math.max(
-            320,
-            window.innerWidth - liveSidebarWidth - 4 - 360,
-          );
-          setRightPanelWidth(Math.min(n, liveMax));
-        }
-      } catch {
-        /* noop */
-      }
-    });
-  }, []);
-  const [viewportWidth, setViewportWidth] = useState(1440);
-  useEffect(() => {
-    const onResize = () => {
-      const width = window.innerWidth;
-      setViewportWidth(width);
-      if (width < COMPACT_WORKBENCH_BREAKPOINT) {
-        setSidebarOpen(false);
-        setWorkbenchOpen(false);
-      }
-    };
-    onResize();
-    window.addEventListener("resize", onResize, { passive: true });
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  // 右侧面板宽度上限：减去 sidebar 、splitter 、chat 区最小宽度，
-  // 保证拖到左极限时不会越过“中间区最小宽度”。
-  // 否则 rightPanelWidth 会被存成一个远大于实际可用空间的值，
-  // flex 布局会压回去，但 aside 内部仍按 props.width 排版，
-  // 导致“容器被压缩 + 内容变宽”的堆叠错位。
-  const SIDEBAR_WIDTH_OPEN = 260; // 同 globals.css 里的 .sidebar-container
-  const SIDEBAR_WIDTH_CLOSED = 0;
-  const SPLITTER_WIDTH = 4;
-  const CHAT_MIN_WIDTH = 360; // 中间 chat 区最小可用宽
-  const sidebarWidth = sidebarOpen ? SIDEBAR_WIDTH_OPEN : SIDEBAR_WIDTH_CLOSED;
-  const rightPanelMaxWidth = Math.max(
-    320,
-    viewportWidth - sidebarWidth - SPLITTER_WIDTH - CHAT_MIN_WIDTH,
-  );
-  /** 两侧都收起时容器收成 56px 窄条,其它情况都用统一 clamp 后的 rightPanelWidth */
-  const filesContainerWidth =
-    filesLayout.viewerHidden && filesLayout.treeCollapsed
-      ? 56
-      : Math.min(rightPanelWidth, rightPanelMaxWidth);
-  const rightPanelStoredWidth = Math.min(rightPanelWidth, rightPanelMaxWidth);
-  useEffect(() => {
-    try {
-      localStorage.setItem("rightPanelWidth", String(rightPanelStoredWidth));
-    } catch {}
-  }, [rightPanelStoredWidth]);
-  const splitterDragRef = useRef<{ startX: number; startW: number } | null>(
-    null
-  );
-  const [rightPanelResizing, setRightPanelResizing] = useState(false);
-  // 拖拽时读最新的 max 宽度，避免 onMove 闭包拿到老值
-  //（拖动过程中窗口 resize 、sidebar 开合变化都会调整 max）。
-  const rightPanelMaxWidthRef = useRef(rightPanelMaxWidth);
-  useEffect(() => {
-    rightPanelMaxWidthRef.current = rightPanelMaxWidth;
-  }, [rightPanelMaxWidth]);
-  const onSplitterMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setRightPanelResizing(true);
-    splitterDragRef.current = {
-      startX: e.clientX,
-      // 关键：startW 不能取 state 里可能被 clamp 过的值，
-      // 用当前真实可见宽度（filesContainerWidth）作起点。
-      // 拖到极限后反向拖，必须越过起点才会改变宽度，从根本上消除“虚增 dx”。
-      startW: filesContainerWidth,
-    };
-    const onMove = (ev: MouseEvent) => {
-      const ref = splitterDragRef.current;
-      if (!ref) return;
-      const dx = ref.startX - ev.clientX;
-      const liveMax = rightPanelMaxWidthRef.current;
-      const next = Math.min(liveMax, Math.max(320, ref.startW + dx));
-      // 如果 clamp 后与当前 state 相同，不触发 re-render。
-      setRightPanelWidth((prev) => (prev === next ? prev : next));
-    };
-    const onUp = () => {
-      splitterDragRef.current = null;
-      setRightPanelResizing(false);
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    document.body.style.cursor = "ew-resize";
-    document.body.style.userSelect = "none";
-  };
   const {
     showAuth,
     authInitialProvider,
@@ -1151,53 +454,18 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const [workflowDebugLoading, setWorkflowDebugLoading] = useState(false);
   const [workflowDebugError, setWorkflowDebugError] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-  const persistWorkbench = useCallback((open: boolean, view: WorkbenchView) => {
-    try {
-      localStorage.setItem("pi-workbench-open", open ? "1" : "0");
-      localStorage.setItem("pi-workbench-view", view.type);
-    } catch {
-      /* noop */
-    }
-  }, []);
-  const openWorkbench = useCallback((view: WorkbenchView) => {
-    setWorkbenchView(view);
-    setWorkbenchOpen(true);
-    persistWorkbench(true, view);
-    if (view.type === "browser" && view.url) {
-      setBrowserOpenRequest({ id: Date.now(), url: view.url });
-    }
-  }, [persistWorkbench]);
-  const selectSessionAndCloseWorkbench = useCallback(
-    (id: string) => {
-      const target = sessions.find((session) => session.id === id);
-      if (target) {
-        const key: RunnerKey = target.path;
-        if (!runnersRef.current.has(key)) {
-          setRunner(key, {
-            ...emptyRunner(),
-            sessionFile: target.path,
-            sessionLoading: true,
-          });
-        }
-        switchTo(key);
-      }
-      setSelectedId(id);
-      setWorkbenchOpen(false);
-      persistWorkbench(false, { type: "overview" });
-    },
-    [persistWorkbench, runnersRef, sessions, setRunner, setSelectedId, switchTo]
-  );
-  const toggleWorkbench = useCallback(() => {
-    setWorkbenchOpen((prev) => {
-      const next = !prev;
-      if (next) {
-        persistWorkbench(true, workbenchView);
-      } else {
-        persistWorkbench(false, workbenchView);
-      }
-      return next;
-    });
-  }, [persistWorkbench, workbenchView]);
+  const { selectSessionAndCloseWorkbench } = useSessionSwitchingController({
+    sessions,
+    selectedId,
+    setSelectedId,
+    closeWorkbench,
+    runnersRef,
+    setRunner,
+    updateRunner,
+    switchTo,
+    attachSseFor,
+    setError,
+  });
   const toggleSkills = () => setShowSkills((prev) => !prev);
   const toggleTools = () => {
     setShowTools((prev) => {
@@ -1631,17 +899,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     budgetPausedTrigger,
   });
 
-  // 宠物窗口发来的 "切到指定 session" 请求
-  useEffect(() => {
-    const api = getElectronApi();
-    if (!api?.pet?.onSwitchSession) return;
-    const unsub = api.pet.onSwitchSession((sessionId) => {
-      const target = sessions.find((s) => s.id === sessionId);
-      if (target) setSelectedId(sessionId);
-    });
-    return unsub;
-  }, [sessions, setSelectedId]);
-
   const messageRenderState = useMemo(() => {
     const shouldAttachForkIds = forkableUserMessages.length > 0;
     const renderedMessages: ChatMessage[] = shouldAttachForkIds ? [] : chatState.messages;
@@ -1771,74 +1028,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     scrollMessagesToBottom();
   }, [displayProgress?.updatedAt, scrollMessagesToBottom]);
 
-  // 选已有 session(P1-8):
-  //  - runnersRef 已有该 session 的 runner → 直接 switchTo(不动 SSE,后台流式继续)
-  //  - 没有 → 冷启动:emptyRunner + fetch context 填 chatState + switchTo
-  //          (不立即 attachSse;用户发送时 send() 会走 create-with-sessionPath 路径)
-  useEffect(() => {
-    if (!selectedId) return;
-    queueMicrotask(() => setError(null));
-    const sel = sessions.find((s) => s.id === selectedId);
-    if (!sel) return;
-    const key: RunnerKey = sel.path;
-
-    const existingRunner = runnersRef.current.get(key);
-    if (existingRunner && !existingRunner.sessionLoading) {
-      // 已有 runner —— 直接切。后台 SSE 继续,切回时累积内容立即可见。
-      switchTo(key);
-      return;
-    }
-
-    // 冷启动:建 loading runner,先切过去显示加载态,再异步填 context
-    if (!existingRunner) {
-      setRunner(key, {
-        ...emptyRunner(),
-        sessionFile: sel.path,
-        sessionLoading: true,
-      });
-    }
-    switchTo(key);
-
-    void fetch(`/api/sessions/${selectedId}/context`)
-      .then((r) => r.json())
-      .then((ctx) => {
-        if (ctx.error) {
-          updateRunner(key, { sessionLoading: false });
-          setError(ctx.error);
-          return;
-        }
-        // P2-I: 从后端拉回的整个历史会话可能包含几百条消息；
-        // 这一重重渲染量包进低优先级 transition，让输入交互优先保持响应。
-        startTransition(() => {
-          updateRunner(key, {
-            chatState: createInitialState(
-              appendRestoredSubagentBatches(
-                ctxToMessages(ctx.messages ?? []),
-                Array.isArray(ctx.subagentBatches)
-                  ? (ctx.subagentBatches as SubagentBatch[])
-                  : undefined
-              )
-            ),
-            ...(Array.isArray(ctx.forkableUserMessages)
-              ? {
-                  forkableUserMessages:
-                    ctx.forkableUserMessages as ForkableUserMessage[],
-                }
-              : {}),
-            ...(ctx.progress
-              ? { progress: ctx.progress as AgentProgress }
-              : {}),
-            sessionLoading: false,
-          });
-        });
-      })
-      .catch((e) => {
-        updateRunner(key, { sessionLoading: false });
-        setError(userFacingMessage(e, { context: "settings" }));
-      });
-
-  }, [runnersRef, selectedId, sessions, setRunner, switchTo, updateRunner]);
-
   // refreshForkList 已挪到 useForkable hook（C1）
   // refreshStats / refreshToolsCount 写到指定 runner；ownerKey 缺省 = 当前活跃 runner。
 
@@ -1961,35 +1150,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     // handleAgentEvent 是函数声明，每次 render 都是新引用，需每次同步到 ref
   });
 
-  // 宠物窗口发来的 "重连指定 session SSE" 请求（lost 态点击重连）。
-  // 必须放在 attachSseFor 声明之后，避免 TDZ（const useCallback 在初始化前不可用）。
-  // 流程：sessionId → SessionInfoLite.path 作 RunnerKey → runnersRef 取 agentId
-  // attachSseFor 内部会先 close 旧 ES（如有）再 new 一个，无需手动清理
-  useEffect(() => {
-    const api = getElectronApi();
-    if (!api?.pet?.onReconnectSession) return;
-    const unsub = api.pet.onReconnectSession((sessionId) => {
-      const sess = sessions.find((s) => s.id === sessionId);
-      if (!sess) {
-        console.warn("[pet] reconnect requested for unknown session", sessionId);
-        return;
-      }
-      const key: RunnerKey = sess.path;
-      const runner = runnersRef.current.get(key);
-      const aid = runner?.agentId;
-      if (!aid) {
-        console.warn(
-          "[pet] reconnect requested but no agentId for session",
-          sessionId
-        );
-        return;
-      }
-      console.log("[pet] reconnecting SSE for", sessionId, "agentId=", aid);
-      attachSseFor(key, aid);
-    });
-    return unsub;
-  }, [activeKeyRef, attachSseFor, runnersRef, sessions]);
-
   const reconnectActiveSession = useCallback(() => {
     if (!agentId) return;
     const key = activeKeyRef.current;
@@ -2014,8 +1174,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     if (!runnersRef.current.has(DRAFT_KEY)) {
       setRunner(DRAFT_KEY, emptyRunner());
     }
-    setWorkbenchOpen(false);
-    persistWorkbench(false, { type: "overview" });
+    closeWorkbench();
     setSelectedId(null);
     switchTo(DRAFT_KEY);
     // draft 已经有上一次留下的 agent? 关掉它再起新的 —— +New chat 语义就是"重置"
@@ -2058,6 +1217,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         ...(typeof data.supportsThinking === "boolean"
           ? { supportsThinking: data.supportsThinking }
           : {}),
+        runtimeProfile: data.runtimeProfile ?? null,
       };
       const sessionFile =
         typeof data.sessionFile === "string" ? data.sessionFile : null;
@@ -2103,7 +1263,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     closeSseFor,
     attachSseFor,
     updateRunner,
-    persistWorkbench,
+    closeWorkbench,
     addOptimisticSession,
   ]);
 
@@ -2292,133 +1452,26 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     [agentId, setSessionOverride]
   );
 
-  const rememberComposerInput = useCallback((text: string) => {
-    const value = text.trim();
-    if (!value) return;
-    historyCursorRef.current = null;
-    historyDraftRef.current = "";
-    setInputHistory((cur) => {
-      const withoutDuplicate = cur.filter((item) => item !== value);
-      const next = [...withoutDuplicate, value].slice(-INPUT_HISTORY_LIMIT);
-      try {
-        localStorage.setItem(INPUT_HISTORY_KEY, JSON.stringify(next));
-      } catch {}
-      return next;
-    });
-  }, []);
-
-  const navigateInputHistory = useCallback(
-    (direction: "prev" | "next") => {
-      if (inputHistory.length === 0) return false;
-      const current = inputRef.current;
-      if (!current) return false;
-
-      const atStart =
-        current.selectionStart === 0 && current.selectionEnd === 0;
-      const atEnd =
-        current.selectionStart === current.value.length &&
-        current.selectionEnd === current.value.length;
-      const browsingHistory = historyCursorRef.current != null;
-      const currentValue = current.value;
-      if (!browsingHistory) {
-        if (direction === "prev" && !atStart && currentValue.trim()) return false;
-        if (direction === "next" && !atEnd) return false;
-      }
-
-      if (historyCursorRef.current == null) {
-        historyDraftRef.current = currentValue;
-        historyCursorRef.current = inputHistory.length;
-      }
-
-      const nextCursor =
-        direction === "prev"
-          ? Math.max(0, historyCursorRef.current - 1)
-          : Math.min(inputHistory.length, historyCursorRef.current + 1);
-      historyCursorRef.current = nextCursor;
-
-      const nextValue =
-        nextCursor === inputHistory.length
-          ? historyDraftRef.current
-          : inputHistory[nextCursor];
-      setInput(nextValue);
-      requestAnimationFrame(() => {
-        const el = inputRef.current;
-        if (!el) return;
-        const pos = direction === "prev" ? 0 : el.value.length;
-        el.setSelectionRange(pos, pos);
-      });
-      return true;
-    },
-    [inputHistory, inputRef, setInput]
-  );
-
-  const runGoalCommand = useCallback(
-    async (raw: string): Promise<boolean> => {
-      const trimmed = raw.trim();
-      if (!trimmed.startsWith("/goal")) return false;
-      const rest = trimmed.slice("/goal".length).trim();
-      if (!rest) {
-        setError(goal ? `当前 goal: ${goal.objective}` : "当前没有 active goal");
-        setInput("");
-        return true;
-      }
-      if (rest === "pause") {
-        if (agentId) {
-          await agentAction(agentId, { type: "goal_pause" }).catch(() => {});
-        }
-        setInput("");
-        return true;
-      }
-      if (rest === "resume") {
-        if (agentId) {
-          await agentAction(agentId, { type: "goal_resume" }).catch(() => {});
-        }
-        setInput("");
-        return true;
-      }
-      if (rest === "clear") {
-        if (agentId) {
-          await agentAction(agentId, { type: "goal_clear" }).catch(() => {});
-        }
-        setInput("");
-        return true;
-      }
-      rememberComposerInput(raw);
-      setInput("");
-      await startGoal(rest);
-      return true;
-    },
-    [
-      agentId,
-      agentAction,
-      goal,
-      rememberComposerInput,
-      setError,
-      setInput,
-      startGoal,
-    ]
-  );
-
-  /**
-   * /workflow 命令拦截：把 `/workflow <目标>` 转成 dynamic workflow 执行。
-   * 无参数时给出用法提示；有参数时清空输入并调 startWorkflow。
-   */
-  const runWorkflowCommand = useCallback(
-    async (raw: string): Promise<boolean> => {
-      const trimmed = raw.trim();
-      if (!trimmed.startsWith("/workflow")) return false;
-      const rest = trimmed.slice("/workflow".length).trim();
-      if (!rest) {
-        setError("用法：/workflow <目标描述>，将用 dynamic workflow 执行该目标");
-        return true;
-      }
-      rememberComposerInput(raw);
-      setInput("");
-      await startWorkflow(rest);
-      return true;
-    },
-    [rememberComposerInput, setError, setInput, startWorkflow]
-  );
+  const {
+    navigateInputHistory,
+    sendWithHistory,
+    steerWithHistory,
+    followUpWithHistory,
+    setComposerInput,
+  } = useComposerHistoryController({
+    inputRef,
+    setInput,
+    getCurrentInput,
+    agentId,
+    goal,
+    setError,
+    agentAction,
+    startGoal,
+    startWorkflow,
+    send,
+    onSteer,
+    onFollowUp,
+  });
 
   const handleGoalPause = useCallback(async () => {
     if (!agentId) return;
@@ -2446,36 +1499,17 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   const handleGoalRunVerification = useCallback(async () => {
     if (!agentId) return;
-    await agentAction(agentId, { type: "goal_run_verification" }).catch(() => {});
-  }, [agentId, agentAction]);
-
-  const sendWithHistory = useCallback(async () => {
-    // P1-E: input 不再是 ChatApp 订阅状态，在交互时点同步读一次 store 快照。
-    const current = getCurrentInput();
-    if (await runGoalCommand(current)) return;
-    if (await runWorkflowCommand(current)) return;
-    rememberComposerInput(current);
-    await send();
-  }, [getCurrentInput, rememberComposerInput, runGoalCommand, runWorkflowCommand, send]);
-
-  const steerWithHistory = useCallback(async () => {
-    rememberComposerInput(getCurrentInput());
-    await onSteer();
-  }, [getCurrentInput, onSteer, rememberComposerInput]);
-
-  const followUpWithHistory = useCallback(async () => {
-    rememberComposerInput(getCurrentInput());
-    await onFollowUp();
-  }, [getCurrentInput, onFollowUp, rememberComposerInput]);
-
-  const setComposerInput = useCallback(
-    (v: string | ((cur: string) => string)) => {
-      historyCursorRef.current = null;
-      historyDraftRef.current = "";
-      setInput(v);
-    },
-    [setInput]
-  );
+    const browserUrl = activeSnapshot.browser.url;
+    const targetUrl =
+      typeof browserUrl === "string" && /^(https?:\/\/|file:\/\/)/i.test(browserUrl)
+        ? browserUrl
+        : undefined;
+    await agentAction(agentId, {
+      type: "goal_run_verification",
+      browserId: runtimeIdentity.browserId,
+      ...(targetUrl ? { targetUrl } : {}),
+    }).catch(() => {});
+  }, [activeSnapshot.browser.url, agentId, agentAction, runtimeIdentity.browserId]);
 
   const resumeWorkflowFromCard = useCallback(
     (
@@ -2797,6 +1831,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             ...(typeof meta.supportsThinking === "boolean"
               ? { supportsThinking: meta.supportsThinking }
               : {}),
+            runtimeProfile: meta.runtimeProfile ?? null,
           });
           void data;
         } catch (e) {
@@ -2862,20 +1897,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     };
   }, [refreshForkList]);
 
-  // panel 颜色用 CSS 变量驱动；class 里只放结构相关
-  return (
-    <div
-      className="flex h-screen overflow-hidden min-w-0"
-      data-testid="shaula-app-shell"
-      style={{
-        background: "var(--bg)",
-        color: "var(--text)",
-      }}
-    >
-      {/* 左：会话列表 */}
+  const sidebarSlot = (
       <Sidebar
         sidebarOpen={sidebarOpen}
-        onToggleSidebar={() => setSidebarOpen((v) => !v)}
+        onToggleSidebar={toggleSidebar}
         cwd={cwd}
         onOpenCwdPicker={openCwdPicker}
         theme={theme}
@@ -2934,67 +1959,59 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           ) : null
         }
       />
+  );
 
-      {/* 右：对话。不再加 inline minWidth=360 ——
-          那是个布局 hint，现在 rightPanelMaxWidth 已经预留了
-          CHAT_MIN_WIDTH 的空间。一旦这里还定下 minWidth，在
-          rightPanelWidth 还没被 clamp 完的跨帧里会让 <main> 拒绝
-          压缩、进而迫使父级 flex 压缩 <aside>、导致外壳与内容宽度
-          不一致。min-w-0 足够保证 truncate 生效。 */}
-      <main
-        className="flex flex-1 flex-col min-w-0 relative"
-        onDragEnter={handleDragEnter}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        <DropOverlay isDragOver={isDragOver} />
-        <TopHeader
-          sidebarOpen={sidebarOpen}
-          theme={theme}
-          agentId={agentId}
-          stats={stats}
-          sseStatus={sseStatus}
-          electronApi={electronApi}
-          currentSessionFile={currentSessionFile}
-          hasSessionContext={Boolean(agentId || selectedId || currentSessionFile)}
-          showTools={showTools}
-          showWorkbench={workbenchOpen}
-          updateStatus={updateState?.status}
-          updateLatestVersion={updateState?.latestVersion}
-          openCommandMenuRequest={openCommandMenuRequest}
-          budget={budget}
-          budgetSpent={budgetSpent}
-          budgetStatus={budgetStatus}
-          budgetHasOverride={budgetHasOverride}
-          onToggleSidebar={() => setSidebarOpen((v) => !v)}
-          onToggleTheme={toggleTheme}
-          onOpenBranches={openBranches}
-          onOpenSystemPrompt={openSystemPrompt}
-          onOpenWorkflows={openWorkflowHistory}
-          onRevealInFinder={() => {
-            if (electronApi && currentSessionFile) {
-              void electronApi
-                .revealInFinder(currentSessionFile)
-                .catch((e) => setError(userFacingMessage(e)));
-            }
-          }}
-          onOpenProviderSetup={() => {
-            setProviderSetupChild(null);
-            setShowProviderSetup(true);
-          }}
-          onOpenSettings={(section) => {
-            window.location.assign(
-              section === "mobile" ? "/settings?section=mobile" : "/settings"
-            );
-          }}
-          onReconnectSession={reconnectActiveSession}
-          onToggleTools={toggleTools}
-          onToggleWorkbench={toggleWorkbench}
-          onCheckForUpdates={checkForUpdates}
-          onDownloadUpdate={openUpdateDownload}
-          onSkipUpdateVersion={skipUpdateVersion}
-        />
+  const headerSlot = (
+    <TopHeader
+      sidebarOpen={sidebarOpen}
+      theme={theme}
+      agentId={agentId}
+      stats={stats}
+      sseStatus={sseStatus}
+      electronApi={electronApi}
+      currentSessionFile={currentSessionFile}
+      hasSessionContext={Boolean(agentId || selectedId || currentSessionFile)}
+      showTools={showTools}
+      showWorkbench={workbenchOpen}
+      updateStatus={updateState?.status}
+      updateLatestVersion={updateState?.latestVersion}
+      openCommandMenuRequest={openCommandMenuRequest}
+      budget={budget}
+      budgetSpent={budgetSpent}
+      budgetStatus={budgetStatus}
+      budgetHasOverride={budgetHasOverride}
+      onToggleSidebar={toggleSidebar}
+      onToggleTheme={toggleTheme}
+      onOpenBranches={openBranches}
+      onOpenSystemPrompt={openSystemPrompt}
+      onOpenWorkflows={openWorkflowHistory}
+      onRevealInFinder={() => {
+        if (electronApi && currentSessionFile) {
+          void electronApi
+            .revealInFinder(currentSessionFile)
+            .catch((e) => setError(userFacingMessage(e)));
+        }
+      }}
+      onOpenProviderSetup={() => {
+        setProviderSetupChild(null);
+        setShowProviderSetup(true);
+      }}
+      onOpenSettings={(section) => {
+        window.location.assign(
+          section === "mobile" ? "/settings?section=mobile" : "/settings"
+        );
+      }}
+      onReconnectSession={reconnectActiveSession}
+      onToggleTools={toggleTools}
+      onToggleWorkbench={toggleWorkbench}
+      onCheckForUpdates={checkForUpdates}
+      onDownloadUpdate={openUpdateDownload}
+      onSkipUpdateVersion={skipUpdateVersion}
+    />
+  );
+
+  const noticesSlot = (
+    <>
         {updateState?.status === "available" && !updateNoticeHidden ? (
           <UpdateNotice
             state={updateState}
@@ -3008,87 +2025,73 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             onClose={() => setLatestNoticeHidden(true)}
           />
         ) : null}
+    </>
+  );
 
-        {sessionLoading && messages.length === 0 ? (
-          <SessionLoadingState session={selectedSession} />
-        ) : messages.length === 0 && !error && !displayProgress ? (
-          <EmptyState
-            providerLabel={currentProvider?.provider ?? providerId}
-            modelLabel={modelId}
-            goal={goal}
-            onOpenModelSetup={() => {
-              setProviderSetupChild(null);
-              setShowProviderSetup(true);
-            }}
-            onStartGoal={() => {
-              setInput((cur) => (cur.trim() ? cur : "/goal "));
-              requestAnimationFrame(() => inputRef.current?.focus());
-            }}
-            onFocusComposer={() => inputRef.current?.focus()}
-            onUseStarter={(prompt) => {
-              setComposerInput((cur) =>
-                cur.trim() ? `${cur.trim()}\n\n${prompt}` : prompt
-              );
-              requestAnimationFrame(() => inputRef.current?.focus());
-            }}
-          />
-        ) : (
-          <MessagesScrollArea
-            messages={messages}
-            error={error}
-            currentProvider={currentProvider}
-            modelId={modelId}
-            activeAssistantIndex={chatState.activeAssistantIndex}
-            agentPhase={agentPhase}
-            cwd={cwd}
-            streaming={streaming}
-            compacting={compacting}
-            compactError={compactError}
-            pinSpacer={pinSpacer}
-            forksCollapsed={forksCollapsed}
-            forkingIndex={forkingIndex}
-            forkText={forkText}
-            forkBusy={forkBusy}
-            messagesScrollRef={messagesScrollRef}
-            messagesEndRef={messagesEndRef}
-            messageRefs={messageRefs}
-            onScroll={handleMessagesScroll}
-            onStartFork={startFork}
-            onCancelFork={cancelFork}
-            onChangeForkText={setForkText}
-            onSubmitFork={submitFork}
-            onForkToNewSession={forkToNewSession}
-            onOpenUrl={openUrlInBrowserPanel}
-            onApproveCall={approveCall}
-            onDenyCall={denyCall}
-            onChooseClarification={chooseClarification}
-            onRespondClarification={respondClarification}
-            onResumeWorkflow={resumeWorkflowFromCard}
-            onWorkflowWorktreeAction={handleWorkflowWorktreeAction}
-            onRetrySubagentTask={retrySubagentTaskFromCard}
-            onResumeSubagentBatch={resumeSubagentBatchFromCard}
-            onOpenSubagentSession={openSubagentSessionFromCard}
-          />
-        )}
+  const mainContentSlot =
+    sessionLoading && messages.length === 0 ? (
+      <SessionLoadingState session={selectedSession} />
+    ) : messages.length === 0 && !error && !displayProgress ? (
+      <EmptyState
+        providerLabel={currentProvider?.provider ?? providerId}
+        modelLabel={modelId}
+        goal={goal}
+        onOpenModelSetup={() => {
+          setProviderSetupChild(null);
+          setShowProviderSetup(true);
+        }}
+        onStartGoal={() => {
+          setInput((cur) => (cur.trim() ? cur : "/goal "));
+          requestAnimationFrame(() => inputRef.current?.focus());
+        }}
+        onFocusComposer={() => inputRef.current?.focus()}
+        onUseStarter={(prompt) => {
+          setComposerInput((cur) =>
+            cur.trim() ? `${cur.trim()}\n\n${prompt}` : prompt
+          );
+          requestAnimationFrame(() => inputRef.current?.focus());
+        }}
+      />
+    ) : (
+      <MessagesScrollArea
+        messages={messages}
+        error={error}
+        currentProvider={currentProvider}
+        modelId={modelId}
+        activeAssistantIndex={chatState.activeAssistantIndex}
+        agentPhase={agentPhase}
+        cwd={cwd}
+        streaming={streaming}
+        compacting={compacting}
+        compactError={compactError}
+        pinSpacer={pinSpacer}
+        forksCollapsed={forksCollapsed}
+        forkingIndex={forkingIndex}
+        forkText={forkText}
+        forkBusy={forkBusy}
+        messagesScrollRef={messagesScrollRef}
+        messagesEndRef={messagesEndRef}
+        messageRefs={messageRefs}
+        onScroll={handleMessagesScroll}
+        onStartFork={startFork}
+        onCancelFork={cancelFork}
+        onChangeForkText={setForkText}
+        onSubmitFork={submitFork}
+        onForkToNewSession={forkToNewSession}
+        onOpenUrl={openUrlInBrowserPanel}
+        onApproveCall={approveCall}
+        onDenyCall={denyCall}
+        onChooseClarification={chooseClarification}
+        onRespondClarification={respondClarification}
+        onResumeWorkflow={resumeWorkflowFromCard}
+        onWorkflowWorktreeAction={handleWorkflowWorktreeAction}
+        onRetrySubagentTask={retrySubagentTaskFromCard}
+        onResumeSubagentBatch={resumeSubagentBatchFromCard}
+        onOpenSubagentSession={openSubagentSessionFromCard}
+      />
+    );
 
-        <div className="relative shrink-0">
-          {showScrollToBottom ? (
-            <button
-              type="button"
-              onClick={() => scrollMessagesToBottom("smooth")}
-              className="absolute left-1/2 top-0 z-20 inline-flex h-9 w-9 -translate-x-1/2 -translate-y-[calc(100%+8px)] items-center justify-center rounded-full border shadow-lg backdrop-blur transition-all hover:-translate-y-[calc(100%+10px)] hover:shadow-xl"
-              style={{
-                borderColor: "var(--border)",
-                background: "color-mix(in srgb, var(--bg-panel) 88%, transparent)",
-                color: "var(--text)",
-              }}
-              aria-label="滚动到底部"
-              title="滚动到底部"
-            >
-              <ArrowDown size={16} />
-            </button>
-          ) : null}
-
+  const composerSlot = (
         <Composer
           inputKey={activeKey}
           setInput={setComposerInput}
@@ -3152,9 +2155,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           soundEnabled={soundEnabled}
           onSoundToggle={onSoundToggle}
         />
-        </div>
-      </main>
+  );
 
+  const workbenchSlot = (
       <WorkbenchSidebar
         open={workbenchOpen}
         view={workbenchView}
@@ -3173,10 +2176,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         providerLabel={currentProvider?.provider ?? providerId}
         modelLabel={modelId}
         thinkingLabel={thinkingLevel}
-        toolsCount={toolsCount?.active ?? 0}
-        pendingFileCount={pendingFiles.length}
-        pendingImageCount={pendingImages.length}
-        filesLayout={filesLayout}
+          runtimeProfile={activeSnapshot.runtimeProfile}
+          toolsCount={toolsCount?.active ?? 0}
+          pendingFileCount={pendingFiles.length}
+          pendingImageCount={pendingImages.length}
+          filesLayout={filesLayout}
         onSplitterMouseDown={onSplitterMouseDown}
         onOpenView={openWorkbench}
         onAbort={onAbort}
@@ -3207,7 +2211,18 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           });
           requestAnimationFrame(() => inputRef.current?.focus());
         }}
+        onPrepareTeamWorkflow={(prompt) => {
+          setComposerInput((cur) => {
+            const sep = cur.trim() ? "\n\n" : "";
+            return `${cur}${sep}${prompt}`;
+          });
+          requestAnimationFrame(() => inputRef.current?.focus());
+        }}
       />
+  );
+
+  const overlaysSlot = (
+    <>
       {showWorkflowHistory && (
         <WorkflowHistoryPanel
           items={workflowHistory}
@@ -3303,7 +2318,26 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         onClose={() => setBudgetPausedTrigger(null)}
         onRaiseAndContinue={handleRaiseAndContinue}
       />
-    </div>
+    </>
+  );
+
+  return (
+    <ChatAppShell
+      sidebar={sidebarSlot}
+      header={headerSlot}
+      notices={noticesSlot}
+      mainContent={mainContentSlot}
+      composer={composerSlot}
+      workbench={workbenchSlot}
+      overlays={overlaysSlot}
+      isDragOver={isDragOver}
+      showScrollToBottom={showScrollToBottom}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      onScrollToBottom={() => scrollMessagesToBottom("smooth")}
+    />
   );
 }
 

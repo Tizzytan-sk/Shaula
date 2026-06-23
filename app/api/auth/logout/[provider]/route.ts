@@ -5,15 +5,18 @@
  * 等价于 DELETE /api/auth?provider=xx，单独暴露是为了和 pi-web 的路由风格对齐。
  */
 import { type NextRequest, NextResponse } from "next/server";
+import { assertApiAccess } from "@/lib/api-boundary";
 import { getAuth, getModelRegistry } from "@/lib/agent-registry";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ provider: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   try {
     const { provider } = await ctx.params;
     if (!provider) {

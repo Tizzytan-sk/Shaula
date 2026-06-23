@@ -72,6 +72,16 @@ export interface SessionRuntimeState {
   runtimeState: SessionRuntimePhase;
 }
 
+export interface AgentRuntimeProfile {
+  kind: "sdk_agent" | "external_text_runner";
+  label: string;
+  details: string;
+  structuredTools: boolean;
+  structuredProgress: boolean;
+  structuredEvidence: boolean;
+  verifier: "full" | "host_only";
+}
+
 /** SDK 的 thinking level */
 export type ThinkingLevel =
   | "off"
@@ -151,6 +161,12 @@ export type MessagePart =
       input: Record<string, unknown>;
       /** 触发规则的 id（用户判断"为什么被拦截"） */
       ruleId?: string;
+      /** 触发规则的人话名称 */
+      ruleName?: string;
+      /** 风险分类 */
+      riskCategory?: string;
+      /** 是否允许本会话记住 allow */
+      allowRemember?: boolean;
       /** "pending" 等用户；"allowed" / "denied" 已结算（可能 user 也可能 timeout） */
       status: "pending" | "allowed" | "denied";
       /** 由谁结算的（"user"/"timeout"），仅 status !== pending 时有意义 */

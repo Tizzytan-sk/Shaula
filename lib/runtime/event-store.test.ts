@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { __setRuntimeLedgerRootForTest } from "@/lib/runtime/file-ledger";
 import {
   __resetRuntimeEventStoreForTest,
   appendRuntimeEvent,
@@ -7,8 +11,18 @@ import {
 } from "./event-store";
 
 describe("runtime event store", () => {
+  let tmpDir = "";
+
   beforeEach(() => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "shaula-runtime-event-test-"));
+    __setRuntimeLedgerRootForTest(tmpDir);
     __resetRuntimeEventStoreForTest();
+  });
+
+  afterEach(() => {
+    __resetRuntimeEventStoreForTest();
+    __setRuntimeLedgerRootForTest(null);
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it("appends and lists runtime events by source and owner", () => {
@@ -64,6 +78,40 @@ describe("runtime event store", () => {
     expect(getRuntimeEvent("event-1")).toMatchObject({
       type: "approval.decision",
       status: "done",
+      updatedAt: 2,
+    });
+  });
+
+  it("rehydrates session events from the runtime ledger", () => {
+    appendRuntimeEvent({
+      id: "persisted-event",
+      source: "agent",
+      type: "agent.started",
+      status: "running",
+      sessionId: "session-persist",
+      agentId: "agent-1",
+      payload: { phase: "first" },
+      createdAt: 1,
+    });
+    appendRuntimeEvent({
+      id: "persisted-event",
+      source: "agent",
+      type: "agent.finished",
+      status: "done",
+      sessionId: "session-persist",
+      agentId: "agent-1",
+      payload: { phase: "done" },
+      createdAt: 1,
+      updatedAt: 2,
+    });
+
+    __resetRuntimeEventStoreForTest();
+
+    expect(listRuntimeEvents({ sessionId: "session-persist" })).toHaveLength(1);
+    expect(getRuntimeEvent("persisted-event")).toMatchObject({
+      type: "agent.finished",
+      status: "done",
+      payload: { phase: "done" },
       updatedAt: 2,
     });
   });

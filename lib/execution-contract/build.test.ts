@@ -53,4 +53,35 @@ describe("buildExecutionContract", () => {
       overrideProfile: "workflow.default",
     });
   });
+
+  it("records explicit and inferred main artifacts", () => {
+    const explicit = buildExecutionContract({
+      agentId: "agent-1",
+      objective: "Update the dashboard",
+      mainArtifact: {
+        kind: "url",
+        label: "Local dashboard",
+        href: "http://localhost:3000/dashboard",
+        source: "explicit",
+      },
+      createdAt: 100,
+    });
+    expect(explicit.mainArtifact).toMatchObject({
+      kind: "url",
+      label: "Local dashboard",
+      href: "http://localhost:3000/dashboard",
+      source: "explicit",
+    });
+
+    const inferred = buildExecutionContract({
+      agentId: "agent-1",
+      objective: "Fix `app/components/GoalTimeline.tsx` rendering",
+      createdAt: 101,
+    });
+    expect(inferred.mainArtifact).toMatchObject({
+      kind: "file",
+      label: "app/components/GoalTimeline.tsx",
+      source: "objective",
+    });
+  });
 });

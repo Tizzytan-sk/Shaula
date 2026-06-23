@@ -38,10 +38,17 @@ function matchesMatcher(event: ToolCallEvent, m: ToolCallMatcher): boolean {
       const val = input[key];
       if (typeof val !== "string") return false;
       if (cond.contains && cond.contains.length > 0) {
-        if (!cond.contains.some((kw) => val.includes(kw))) return false;
+        const haystack = cond.caseInsensitive ? val.toLowerCase() : val;
+        if (
+          !cond.contains.some((kw) =>
+            haystack.includes(cond.caseInsensitive ? kw.toLowerCase() : kw)
+          )
+        ) {
+          return false;
+        }
       }
       if (cond.regex) {
-        if (!new RegExp(cond.regex).test(val)) return false;
+        if (!new RegExp(cond.regex, cond.flags).test(val)) return false;
       }
     }
   }

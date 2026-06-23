@@ -153,6 +153,15 @@ describe("skill eval harness", () => {
       "task-a-typecheck-fallback",
       "task-b-readonly-verifier-dirty-json",
       "task-c-route-decision-visibility",
+      "p2-coding-diff-success",
+      "p2-premature-completion-rejection",
+      "p2-failed-required-check",
+      "p2-needs-user-pause",
+      "p2-blocked-pause",
+      "p2-browser-observation",
+      "p2-subagent-write-boundary",
+      "p2-workflow-worktree-merge-approval",
+      "p2-local-cli-shim",
     ]);
   });
 });

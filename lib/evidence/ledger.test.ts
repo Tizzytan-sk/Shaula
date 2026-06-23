@@ -187,6 +187,32 @@ describe("evidence ledger helpers", () => {
     expect(coverage.matchedEvidenceIds).toEqual(["browser-1"]);
   });
 
+  it("does not let failed browser observations satisfy browser requirements", () => {
+    const failedBrowserEvidence = evidenceRefToEvaluationEvidence(
+      evidence({
+        id: "browser-failed",
+        kind: "browser_step",
+        title: "Verify local app",
+        browserId: "agent:agent-1",
+        metadata: {
+          status: "done",
+          passed: false,
+        },
+      })
+    );
+
+    const coverage = requiredEvidenceCoverage(
+      ["browser_observation"],
+      [failedBrowserEvidence]
+    );
+
+    expect(failedBrowserEvidence.outcome).toBe("failed");
+    expect(coverage.missing).toEqual([
+      "browser_observation (requires host_observed)",
+    ]);
+    expect(coverage.matchedEvidenceIds).toEqual([]);
+  });
+
   it("rejects self-reported test evidence for deterministic requirements", () => {
     const reportedTest = evidenceRefToEvaluationEvidence(evidence());
     const coverage = requiredEvidenceCoverage(["test_result"], [reportedTest]);

@@ -8,6 +8,7 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { completeSimple } from "@earendil-works/pi-ai";
+import { assertApiAccess } from "@/lib/api-boundary";
 import { getModelRegistry } from "@/lib/agent-registry";
 import { classifyProviderReadiness } from "@/lib/auth/readiness";
 
@@ -26,6 +27,8 @@ function pickModel(provider: string, modelId?: string) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const startedAt = Date.now();
   let httpStatus: number | undefined;
   try {

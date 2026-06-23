@@ -9,7 +9,9 @@ import type {
 } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Boxes,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -21,14 +23,28 @@ import {
   MessageSquare,
   Plus,
   Square,
+  Target,
   Terminal,
   X,
 } from "lucide-react";
 import type { BrowserAnnotation, BrowserSnapshot } from "@/lib/browser/types";
 import type { BudgetStatus } from "@/lib/budget/types";
 import type { ExecutionContractSummary } from "@/lib/execution-contract/types";
+import { summarizeExecutionMode } from "@/lib/agent-mode/execution-mode";
 import type { RuntimeIdentity } from "@/lib/runtime/identity";
 import type { StatsSnapshot } from "@/lib/session-runner";
+import type { AgentRuntimeProfile } from "@/lib/types";
+import type { AgentGoal, GoalRunClosure } from "@/lib/goal/types";
+import type { EvidenceRef } from "@/lib/evidence/types";
+import type { AdvisoryRouteDecision } from "@/lib/task-router/types";
+import type { ExecutionModeSummary } from "@/lib/agent-mode/types";
+import type { TeamTask } from "@/lib/team-state/types";
+import type {
+  TeamTaskSynthesisAssistanceMeta,
+  TeamTaskSynthesisItem,
+  TeamTaskSynthesisSummary,
+} from "@/lib/team-state/synthesis";
+import type { TeamTaskVerificationSummary } from "@/lib/team-state/verifier";
 import type { AgentProgress, ProgressArtifact, ProgressGroup } from "@/lib/progress/types";
 import FileBrowser from "./FileBrowser";
 import { BrowserPanel } from "./BrowserPanel";
@@ -41,6 +57,7 @@ export type WorkbenchView =
   | { type: "outputs" }
   | { type: "files"; path?: string }
   | { type: "context" }
+  | { type: "team" }
   | { type: "browser"; url?: string };
 
 type WorkbenchTabKind =
@@ -49,6 +66,7 @@ type WorkbenchTabKind =
   | "outputs"
   | "files"
   | "context"
+  | "team"
   | "browser"
   | "terminal"
   | "sidechat";
@@ -63,6 +81,13 @@ interface WorkbenchTab {
   path?: string;
 }
 
+interface TeamAssistUserError {
+  title?: string;
+  message?: string;
+  actionLabel?: string;
+  retryable?: boolean;
+}
+
 type WorkbenchRecommendationKind = "url" | "file" | "output";
 
 interface WorkbenchRecommendation {
@@ -71,6 +96,17 @@ interface WorkbenchRecommendation {
   title: string;
   subtitle: string;
   href?: string;
+}
+
+interface WorkbenchGoalStatePayload {
+  goal: AgentGoal | null;
+  contract: ExecutionContractSummary | null;
+  ledgerEvidence: EvidenceRef[];
+  lastClosure: GoalRunClosure | null;
+  routeDecision: AdvisoryRouteDecision | null;
+  teamTasks: TeamTask[];
+  teamTaskVerification: TeamTaskVerificationSummary | null;
+  teamTaskSynthesis: TeamTaskSynthesisSummary | null;
 }
 
 export interface WorkbenchSidebarProps {
@@ -91,6 +127,7 @@ export interface WorkbenchSidebarProps {
   providerLabel: string;
   modelLabel: string;
   thinkingLabel: string;
+  runtimeProfile: AgentRuntimeProfile | null;
   toolsCount: number;
   pendingFileCount: number;
   pendingImageCount: number;
@@ -102,6 +139,7 @@ export interface WorkbenchSidebarProps {
   onFilesLayoutChange: Dispatch<SetStateAction<FilesLayout>>;
   onOpenProgressUrl?: (url: string) => void;
   onAnnotate: (annotations: BrowserAnnotation[]) => void;
+  onPrepareTeamWorkflow?: (prompt: string) => void;
 }
 
 export function WorkbenchSidebar({
@@ -122,6 +160,7 @@ export function WorkbenchSidebar({
   providerLabel,
   modelLabel,
   thinkingLabel,
+  runtimeProfile,
   toolsCount,
   pendingFileCount,
   pendingImageCount,
@@ -133,6 +172,7 @@ export function WorkbenchSidebar({
   onFilesLayoutChange,
   onOpenProgressUrl,
   onAnnotate,
+  onPrepareTeamWorkflow,
 }: WorkbenchSidebarProps) {
   const storageKey = useMemo(
     () =>
@@ -141,13 +181,9 @@ export function WorkbenchSidebar({
       }`,
     [agentId, cwd, runtimeIdentity.sessionId]
   );
-  const [tabs, setTabs] = useState<WorkbenchTab[]>(() =>
-    loadStoredWorkbenchTabs(storageKey).tabs
-  );
-  const [activeTabId, setActiveTabId] = useState(
-    () => loadStoredWorkbenchTabs(storageKey).activeTabId
-  );
-  const [loadedStorageKey, setLoadedStorageKey] = useState(storageKey);
+  const [tabs, setTabs] = useState<WorkbenchTab[]>(() => [homeTab()]);
+  const [activeTabId, setActiveTabId] = useState("home");
+  const [loadedStorageKey, setLoadedStorageKey] = useState<string | null>(null);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const viewRequestKey = `${view.type}:${"url" in view ? view.url ?? "" : ""}:${
     "path" in view ? view.path ?? "" : ""
@@ -330,6 +366,7 @@ export function WorkbenchSidebar({
         <div className="min-h-0 w-full max-w-full flex-1 overflow-auto">
           {activeTab.kind === "home" && (
             <OverviewPanel
+              agentId={agentId}
               progress={progress}
               contract={contract}
               streaming={streaming}
@@ -340,6 +377,7 @@ export function WorkbenchSidebar({
               providerLabel={providerLabel}
               modelLabel={modelLabel}
               thinkingLabel={thinkingLabel}
+              runtimeProfile={runtimeProfile}
               toolsCount={toolsCount}
               pendingFileCount={pendingFileCount}
               pendingImageCount={pendingImageCount}
@@ -384,9 +422,17 @@ export function WorkbenchSidebar({
               providerLabel={providerLabel}
               modelLabel={modelLabel}
               thinkingLabel={thinkingLabel}
+              runtimeProfile={runtimeProfile}
               toolsCount={toolsCount}
               pendingFileCount={pendingFileCount}
               pendingImageCount={pendingImageCount}
+            />
+          )}
+          {activeTab.kind === "team" && (
+            <TeamPlanDetail
+              agentId={agentId}
+              contract={contract}
+              onPrepareTeamWorkflow={onPrepareTeamWorkflow}
             />
           )}
           {activeTab.kind === "browser" && !activeTab.url && (
@@ -508,6 +554,11 @@ function WorkbenchCreateMenu({
           onClick={() => onOpenView({ type: "overview" })}
         />
         <CreateMenuButton
+          icon={<Boxes size={14} />}
+          label="Team"
+          onClick={() => onOpenView({ type: "team" })}
+        />
+        <CreateMenuButton
           icon={<MessageSquare size={14} />}
           label="侧边聊天"
           hint="即将支持"
@@ -617,6 +668,12 @@ function WorkbenchHomeLauncher({
           title="概览"
           body="查看 session 摘要"
           onClick={() => onOpenView({ type: "overview" })}
+        />
+        <LauncherTile
+          icon={<Boxes size={18} />}
+          title="Team"
+          body="查看协作计划"
+          onClick={() => onOpenView({ type: "team" })}
         />
       </div>
       <div className="space-y-1">
@@ -824,6 +881,7 @@ function SidechatPlaceholder() {
 }
 
 function OverviewPanel({
+  agentId,
   progress,
   contract,
   streaming,
@@ -834,6 +892,7 @@ function OverviewPanel({
   providerLabel,
   modelLabel,
   thinkingLabel,
+  runtimeProfile,
   toolsCount,
   pendingFileCount,
   pendingImageCount,
@@ -842,6 +901,7 @@ function OverviewPanel({
   onAbort,
   onOpenTerminal,
 }: {
+  agentId: string | null;
   progress: AgentProgress | null;
   contract: ExecutionContractSummary | null;
   streaming: boolean;
@@ -852,6 +912,7 @@ function OverviewPanel({
   providerLabel: string;
   modelLabel: string;
   thinkingLabel: string;
+  runtimeProfile: AgentRuntimeProfile | null;
   toolsCount: number;
   pendingFileCount: number;
   pendingImageCount: number;
@@ -912,6 +973,13 @@ function OverviewPanel({
         streaming={streaming}
         onAbort={onAbort}
         onOpenProgress={() => onOpenView({ type: "progress" })}
+      />
+
+      <GoalStateStrip
+        agentId={agentId}
+        contract={contract}
+        progress={progress}
+        streaming={streaming}
       />
 
       <WorkbenchHomeLauncher
@@ -1006,7 +1074,7 @@ function OverviewPanel({
       >
         <OverviewLine
           primary={`${modelLabel || providerLabel || "Model"} · ${thinkingLabel}`}
-          secondary={`Context ${contextPct} · Tools ${toolsCount}${
+          secondary={`${runtimeProfile?.label ?? "SDK-backed agent"} · Context ${contextPct} · Tools ${toolsCount}${
             budgetTriggered ? " · Budget hit" : ""
           }`}
           tone={budgetTriggered ? "error" : undefined}
@@ -1151,39 +1219,42 @@ function TaskCockpitCard({
 
         {summary.steps.length > 0 ? (
           <div className="space-y-1">
-            {summary.steps.slice(0, 4).map((step) => (
-              <div
-                key={step.id}
-                className="flex min-w-0 items-center gap-2 rounded px-1.5 py-1 text-token-xs"
-                style={{
-                  background:
-                    step.status === "running" ? "var(--color-warning-bg)" : "transparent",
-                  color: "var(--text-muted)",
-                }}
-              >
-                <span
-                  className="h-1.5 w-1.5 shrink-0 rounded-full"
+            {summary.steps.slice(0, 4).map((step) => {
+              const stepTitle = shortDisplayText(step.title, 96);
+              return (
+                <div
+                  key={step.id}
+                  className="flex min-w-0 items-center gap-2 rounded px-1.5 py-1 text-token-xs"
                   style={{
                     background:
-                      step.status === "completed"
-                        ? "var(--accent)"
-                        : step.status === "running"
-                          ? "var(--color-warning)"
-                          : step.status === "failed" || step.status === "blocked"
-                            ? "var(--color-danger)"
-                            : "var(--border)",
+                      step.status === "running" ? "var(--color-warning-bg)" : "transparent",
+                    color: "var(--text-muted)",
                   }}
-                />
-                <span
-                  className="min-w-0 flex-1 truncate"
-                  style={{ color: step.status === "running" ? "var(--text)" : undefined }}
-                  title={step.title}
                 >
-                  {step.title}
-                </span>
-                <span className="shrink-0">{stepStatusLabel(step.status)}</span>
-              </div>
-            ))}
+                  <span
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{
+                      background:
+                        step.status === "completed"
+                          ? "var(--accent)"
+                          : step.status === "running"
+                            ? "var(--color-warning)"
+                            : step.status === "failed" || step.status === "blocked"
+                              ? "var(--color-danger)"
+                              : "var(--border)",
+                    }}
+                  />
+                  <span
+                    className="min-w-0 flex-1 truncate"
+                    style={{ color: step.status === "running" ? "var(--text)" : undefined }}
+                    title={stepTitle}
+                  >
+                    {stepTitle}
+                  </span>
+                  <span className="shrink-0">{stepStatusLabel(step.status)}</span>
+                </div>
+              );
+            })}
           </div>
         ) : null}
 
@@ -1211,6 +1282,1250 @@ function TaskCockpitCard({
         ) : null}
       </div>
     </section>
+  );
+}
+
+function GoalStateStrip({
+  agentId,
+  contract,
+  progress,
+  streaming,
+}: {
+  agentId: string | null;
+  contract: ExecutionContractSummary | null;
+  progress: AgentProgress | null;
+  streaming: boolean;
+}) {
+  const [payload, setPayload] = useState<WorkbenchGoalStatePayload | null>(null);
+  const progressUpdatedAt = progress?.updatedAt ?? 0;
+
+  useEffect(() => {
+    if (!agentId) {
+      queueMicrotask(() => setPayload(null));
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/agent/${agentId}?action=goal_timeline`);
+        if (!res.ok) return;
+        const json = (await res.json()) as Partial<WorkbenchGoalStatePayload>;
+        if (cancelled) return;
+        setPayload({
+          goal: json.goal ?? null,
+          contract: json.contract ?? null,
+          ledgerEvidence: Array.isArray(json.ledgerEvidence)
+            ? json.ledgerEvidence
+            : [],
+          lastClosure: json.lastClosure ?? null,
+          routeDecision: json.routeDecision ?? null,
+          teamTasks: Array.isArray(json.teamTasks) ? json.teamTasks : [],
+          teamTaskVerification: json.teamTaskVerification ?? null,
+          teamTaskSynthesis: json.teamTaskSynthesis ?? null,
+        });
+      } catch {
+        if (!cancelled) setPayload(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, contract?.id, progressUpdatedAt, streaming]);
+
+  const summary = summarizeGoalState({
+    payload,
+    contract,
+    progress,
+    streaming,
+  });
+  const modeSummary = summarizeExecutionMode(payload?.routeDecision);
+  const teamTaskSummary = summarizeTeamTasks(
+    payload?.teamTasks ?? [],
+    payload?.teamTaskVerification ?? null
+  );
+  if (!summary) return null;
+
+  const StatusIcon =
+    summary.tone === "done"
+      ? CheckCircle2
+      : summary.tone === "error" || summary.tone === "warning"
+        ? AlertTriangle
+        : Target;
+  const color = goalStateToneColor(summary.tone);
+  const objectiveLabel = shortDisplayText(summary.objective, 18);
+
+  return (
+    <section
+      className="overflow-hidden rounded border p-2.5"
+      style={{
+        borderColor: "var(--border-soft)",
+        background: "var(--bg-panel)",
+      }}
+      data-testid="workbench-goal-state"
+    >
+      <div className="mb-2 flex min-w-0 items-start gap-2">
+        <StatusIcon
+          size={15}
+          className="mt-0.5 shrink-0"
+          style={{ color }}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span
+              className="shrink-0 rounded px-1.5 py-0.5 text-token-xs font-medium"
+              style={{
+                background: "var(--bg-selected)",
+                color,
+              }}
+              data-testid="workbench-goal-state-status"
+            >
+              {summary.statusLabel}
+            </span>
+            <span
+              className="min-w-0 truncate text-token-xs"
+              style={{ color: "var(--text-muted)" }}
+              title={summary.artifact}
+              data-testid="workbench-goal-state-artifact"
+            >
+              {summary.artifact}
+            </span>
+          </div>
+          <div
+            className="mt-1 line-clamp-2 text-sm font-medium leading-snug"
+            title={summary.objective}
+            data-testid="workbench-goal-state-objective"
+          >
+            {objectiveLabel}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-1.5">
+        <GoalStateMetric
+          label="Required"
+          value={summary.requiredLabel}
+          testId="workbench-goal-state-required"
+        />
+        <GoalStateMetric
+          label="Verified"
+          value={summary.verifiedLabel}
+          testId="workbench-goal-state-verified"
+        />
+        <GoalStateMetric
+          label="Missing"
+          value={summary.missingLabel}
+          tone={summary.missing.length > 0 ? "warning" : "done"}
+          testId="workbench-goal-state-missing"
+        />
+      </div>
+
+      {modeSummary ? <ExecutionModeMiniStrip summary={modeSummary} /> : null}
+      {teamTaskSummary ? <TeamTaskMiniStrip summary={teamTaskSummary} /> : null}
+
+      {summary.detail && (
+        <div
+          className="mt-2 truncate text-token-xs"
+          style={{ color: "var(--text-muted)" }}
+          title={summary.detail}
+        >
+          {summary.detail}
+        </div>
+      )}
+    </section>
+  );
+}
+
+interface TeamTaskSummary {
+  total: number;
+  running: number;
+  warning: number;
+  failed: number;
+  completed: number;
+  evidenceRefs: number;
+  latestTitle: string;
+  tone: "running" | "warning" | "done";
+  verification?: TeamTaskVerificationSummary | null;
+}
+
+function summarizeTeamTasks(
+  tasks: TeamTask[],
+  verification: TeamTaskVerificationSummary | null
+): TeamTaskSummary | null {
+  if (tasks.length === 0) return null;
+  const running = tasks.filter((task) => task.status === "running").length;
+  const warning = tasks.filter((task) => task.status === "warning").length;
+  const failed = tasks.filter((task) => task.status === "failed").length;
+  const completed = tasks.filter((task) => task.status === "completed").length;
+  const evidenceRefs = new Set(tasks.flatMap((task) => task.evidenceIds)).size;
+  const latest = tasks
+    .slice()
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))[0];
+  return {
+    total: tasks.length,
+    running,
+    warning,
+    failed,
+    completed,
+    evidenceRefs,
+    latestTitle: latest?.title ?? "Team task",
+    tone:
+      verification?.status === "failed" ||
+      verification?.status === "warning" ||
+      failed ||
+      warning
+        ? "warning"
+        : running
+          ? "running"
+          : "done",
+    verification,
+  };
+}
+
+function TeamTaskMiniStrip({ summary }: { summary: TeamTaskSummary }) {
+  const color =
+    summary.tone === "warning"
+      ? "var(--color-warning)"
+      : summary.tone === "running"
+        ? "var(--accent)"
+        : "var(--color-success)";
+  const statusLabel =
+    summary.verification?.status === "failed"
+      ? "verification failed"
+      : summary.verification?.status === "warning"
+        ? "verification warning"
+        : summary.failed > 0
+      ? `${summary.failed} failed`
+      : summary.warning > 0
+        ? `${summary.warning} warning`
+        : summary.running > 0
+          ? `${summary.running} running`
+          : `${summary.completed}/${summary.total} done`;
+  return (
+    <div
+      className="mt-2 rounded border px-2 py-1.5"
+      style={{
+        borderColor: "var(--border-soft)",
+        background: "var(--bg-selected)",
+      }}
+      data-testid="workbench-team-tasks"
+      title={summary.latestTitle}
+    >
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span
+          className="shrink-0 rounded px-1.5 py-0.5 text-token-xs font-medium"
+          style={{ background: "var(--bg-panel)", color }}
+          data-testid="workbench-team-tasks-status"
+        >
+          Team tasks
+        </span>
+        <span
+          className="min-w-0 truncate text-token-xs"
+          style={{ color: "var(--text-muted)" }}
+          data-testid="workbench-team-tasks-detail"
+        >
+          {statusLabel} · {summary.evidenceRefs} evidence refs
+        </span>
+      </div>
+      <div
+        className="mt-1 truncate text-token-xs"
+        style={{ color: "var(--text-muted)" }}
+        title={summary.verification?.summary ?? summary.latestTitle}
+      >
+        {summary.verification?.summary ?? summary.latestTitle}
+      </div>
+    </div>
+  );
+}
+
+type TeamPlanTemplateMode = "readonly" | "worktree";
+const DEFAULT_TEAM_PLAN_REVIEW_SUBJECT = "Review the current implementation";
+const DEFAULT_TEAM_PLAN_IMPLEMENTATION_PROMPT =
+  "Implement the requested change in an isolated worktree.";
+
+function TeamPlanDetail({
+  agentId,
+  contract,
+  onPrepareTeamWorkflow,
+}: {
+  agentId: string | null;
+  contract: ExecutionContractSummary | null;
+  onPrepareTeamWorkflow?: (prompt: string) => void;
+}) {
+  const [payload, setPayload] = useState<WorkbenchGoalStatePayload | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!agentId) {
+      setPayload(null);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/agent/${agentId}?action=goal_timeline`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = (await res.json()) as Partial<WorkbenchGoalStatePayload>;
+      setPayload({
+        goal: json.goal ?? null,
+        contract: json.contract ?? null,
+        ledgerEvidence: Array.isArray(json.ledgerEvidence)
+          ? json.ledgerEvidence
+          : [],
+        lastClosure: json.lastClosure ?? null,
+        routeDecision: json.routeDecision ?? null,
+        teamTasks: Array.isArray(json.teamTasks) ? json.teamTasks : [],
+        teamTaskVerification: json.teamTaskVerification ?? null,
+        teamTaskSynthesis: json.teamTaskSynthesis ?? null,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [agentId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const tasks = payload?.teamTasks ?? [];
+  const verification = payload?.teamTaskVerification ?? null;
+  const synthesis = payload?.teamTaskSynthesis ?? null;
+  const evidenceById = useMemo(
+    () => new Map((payload?.ledgerEvidence ?? []).map((item) => [item.id, item])),
+    [payload?.ledgerEvidence]
+  );
+  const summary = summarizeTeamTasks(tasks, verification);
+
+  return (
+    <div
+      className="h-full min-h-0 space-y-2 overflow-auto px-2 py-2"
+      data-testid="workbench-team-plan"
+    >
+      <section
+        className="rounded border p-3"
+        style={{
+          borderColor: "var(--border)",
+          background: "var(--bg-panel)",
+        }}
+      >
+        <div className="flex min-w-0 items-start gap-2">
+          <Boxes
+            size={16}
+            className="mt-0.5 shrink-0"
+            style={{ color: "var(--accent)" }}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold">Team Plan</div>
+            <div
+              className="mt-0.5 truncate text-token-xs"
+              style={{ color: "var(--text-muted)" }}
+              title={payload?.contract?.objective ?? payload?.goal?.objective}
+            >
+              {payload?.contract?.objective ?? payload?.goal?.objective ?? "No active goal"}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="rounded px-2 py-1 text-token-xs hover:bg-[color:var(--bg-hover)]"
+            style={{ color: "var(--accent)" }}
+            disabled={loading}
+          >
+            {loading ? "刷新中" : "刷新"}
+          </button>
+        </div>
+
+        {error ? (
+          <div
+            className="mt-2 rounded px-2 py-1.5 text-token-xs"
+            style={{
+              color: "var(--color-danger)",
+              background: "var(--bg-selected)",
+            }}
+          >
+            {error}
+          </div>
+        ) : null}
+
+        {summary ? (
+          <div className="mt-3 grid grid-cols-3 gap-1.5">
+            <GoalStateMetric
+              label="Tasks"
+              value={String(summary.total)}
+              testId="workbench-team-plan-count"
+            />
+            <GoalStateMetric
+              label="Status"
+              value={verification?.status ?? summary.tone}
+              tone={
+                verification?.status === "passed" || summary.tone === "done"
+                  ? "done"
+                  : "warning"
+              }
+              testId="workbench-team-plan-status"
+            />
+            <GoalStateMetric
+              label="Evidence"
+              value={String(summary.evidenceRefs)}
+              testId="workbench-team-plan-evidence"
+            />
+          </div>
+        ) : (
+          <div
+            className="mt-3 rounded border px-2 py-2 text-token-xs"
+            style={{
+              borderColor: "var(--border-soft)",
+              color: "var(--text-muted)",
+            }}
+          >
+            暂无 Team task。普通 single-agent 任务不会强制创建 Team Plan。
+          </div>
+        )}
+      </section>
+
+      <TeamPlanTemplateEditor
+        contract={payload?.contract ?? contract}
+        onPrepareTeamWorkflow={onPrepareTeamWorkflow}
+      />
+
+      {verification ? (
+        <section
+          className="rounded border p-2.5"
+          style={{
+            borderColor: "var(--border-soft)",
+            background: "var(--bg-panel)",
+          }}
+          data-testid="workbench-team-plan-verification"
+        >
+          <div className="mb-2 flex items-center gap-1.5">
+            <span
+              className="rounded px-1.5 py-0.5 text-token-xs font-medium"
+              style={{
+                background: "var(--bg-selected)",
+                color: teamPlanVerificationColor(verification.status),
+              }}
+            >
+              {verification.status}
+            </span>
+            <span className="min-w-0 truncate text-token-xs" title={verification.summary}>
+              {verification.summary}
+            </span>
+          </div>
+          <div className="space-y-1">
+            {verification.checks.slice(0, 8).map((check) => (
+              <div
+                key={check.id}
+                className="rounded px-2 py-1.5"
+                style={{ background: "var(--bg-selected)" }}
+              >
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span
+                    className="shrink-0 rounded px-1 py-0.5 text-token-xs"
+                    style={{
+                      color: teamPlanVerificationColor(check.status),
+                      background: "var(--bg-panel)",
+                    }}
+                  >
+                    {check.status}
+                  </span>
+                  <span className="min-w-0 truncate text-token-xs font-medium">
+                    {check.id}
+                  </span>
+                </div>
+                <div
+                  className="mt-0.5 line-clamp-2 text-token-xs"
+                  style={{ color: "var(--text-muted)" }}
+                  title={check.message}
+                >
+                  {check.message}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {synthesis ? (
+        <TeamPlanSynthesis
+          agentId={agentId}
+          synthesis={synthesis}
+          onRefresh={load}
+        />
+      ) : null}
+
+      <section className="space-y-2">
+        {tasks.map((task) => (
+          <TeamPlanTaskCard
+            key={task.id}
+            task={task}
+            evidenceById={evidenceById}
+          />
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function TeamPlanTemplateEditor({
+  contract,
+  onPrepareTeamWorkflow,
+}: {
+  contract: ExecutionContractSummary | null;
+  onPrepareTeamWorkflow?: (prompt: string) => void;
+}) {
+  const contractObjective = contract?.objective?.trim();
+  const [mode, setMode] = useState<TeamPlanTemplateMode>("readonly");
+  const [subject, setSubject] = useState(
+    contractObjective || DEFAULT_TEAM_PLAN_REVIEW_SUBJECT
+  );
+  const [questions, setQuestions] = useState(
+    "What correctness risks remain?\nWhat evidence is missing?\nAre there conflicting conclusions?"
+  );
+  const [implementationPrompt, setImplementationPrompt] = useState(
+    contractObjective || DEFAULT_TEAM_PLAN_IMPLEMENTATION_PROMPT
+  );
+  const [verificationPrompt, setVerificationPrompt] = useState(
+    "Review the produced diff for correctness, missing tests, regressions, and unsupported claims."
+  );
+  const [requestMerge, setRequestMerge] = useState(false);
+
+  useEffect(() => {
+    if (!contractObjective) return;
+    setSubject((current) =>
+      current === DEFAULT_TEAM_PLAN_REVIEW_SUBJECT ? contractObjective : current
+    );
+    setImplementationPrompt((current) =>
+      current === DEFAULT_TEAM_PLAN_IMPLEMENTATION_PROMPT
+        ? contractObjective
+        : current
+    );
+  }, [contractObjective]);
+
+  const preparedPrompt = useMemo(
+    () =>
+      buildTeamWorkflowPrompt({
+        mode,
+        subject,
+        questions,
+        implementationPrompt,
+        verificationPrompt,
+        requestMerge,
+      }),
+    [implementationPrompt, mode, questions, requestMerge, subject, verificationPrompt]
+  );
+  const disabled = !onPrepareTeamWorkflow;
+
+  return (
+    <section
+      className="rounded border p-2.5"
+      style={{
+        borderColor: "var(--border-soft)",
+        background: "var(--bg-panel)",
+      }}
+      data-testid="workbench-team-plan-editor"
+    >
+      <div className="mb-2 flex min-w-0 items-center gap-1.5">
+        <span
+          className="rounded px-1.5 py-0.5 text-token-xs font-medium"
+          style={{
+            background: "var(--bg-selected)",
+            color: "var(--accent)",
+          }}
+        >
+          Prepare
+        </span>
+        <span
+          className="min-w-0 truncate text-token-xs"
+          style={{ color: "var(--text-muted)" }}
+        >
+          Team workflow preview
+        </span>
+      </div>
+      <div className="mb-2 grid grid-cols-2 gap-1">
+        <button
+          type="button"
+          onClick={() => setMode("readonly")}
+          className="rounded px-2 py-1.5 text-token-xs"
+          style={{
+            background:
+              mode === "readonly" ? "var(--bg-selected)" : "transparent",
+            color: mode === "readonly" ? "var(--accent)" : "var(--text-muted)",
+            border: "1px solid var(--border-soft)",
+          }}
+          data-testid="workbench-team-plan-mode-readonly"
+        >
+          Read-only review
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode("worktree")}
+          className="rounded px-2 py-1.5 text-token-xs"
+          style={{
+            background:
+              mode === "worktree" ? "var(--bg-selected)" : "transparent",
+            color: mode === "worktree" ? "var(--accent)" : "var(--text-muted)",
+            border: "1px solid var(--border-soft)",
+          }}
+          data-testid="workbench-team-plan-mode-worktree"
+        >
+          Worktree implementation
+        </button>
+      </div>
+
+      {mode === "readonly" ? (
+        <div className="space-y-2">
+          <label className="block text-token-xs">
+            <span style={{ color: "var(--text-muted)" }}>Subject</span>
+            <input
+              value={subject}
+              onChange={(event) => setSubject(event.target.value)}
+              className="mt-1 w-full rounded border bg-transparent px-2 py-1.5 text-token-xs outline-none"
+              style={{
+                borderColor: "var(--border-soft)",
+                color: "var(--text)",
+              }}
+              data-testid="workbench-team-plan-subject"
+            />
+          </label>
+          <label className="block text-token-xs">
+            <span style={{ color: "var(--text-muted)" }}>Questions</span>
+            <textarea
+              value={questions}
+              onChange={(event) => setQuestions(event.target.value)}
+              rows={4}
+              className="mt-1 w-full resize-none rounded border bg-transparent px-2 py-1.5 text-token-xs outline-none"
+              style={{
+                borderColor: "var(--border-soft)",
+                color: "var(--text)",
+              }}
+              data-testid="workbench-team-plan-questions"
+            />
+          </label>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <label className="block text-token-xs">
+            <span style={{ color: "var(--text-muted)" }}>Implementation</span>
+            <textarea
+              value={implementationPrompt}
+              onChange={(event) => setImplementationPrompt(event.target.value)}
+              rows={3}
+              className="mt-1 w-full resize-none rounded border bg-transparent px-2 py-1.5 text-token-xs outline-none"
+              style={{
+                borderColor: "var(--border-soft)",
+                color: "var(--text)",
+              }}
+              data-testid="workbench-team-plan-implementation"
+            />
+          </label>
+          <label className="block text-token-xs">
+            <span style={{ color: "var(--text-muted)" }}>Verification</span>
+            <textarea
+              value={verificationPrompt}
+              onChange={(event) => setVerificationPrompt(event.target.value)}
+              rows={3}
+              className="mt-1 w-full resize-none rounded border bg-transparent px-2 py-1.5 text-token-xs outline-none"
+              style={{
+                borderColor: "var(--border-soft)",
+                color: "var(--text)",
+              }}
+              data-testid="workbench-team-plan-verification-prompt"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-token-xs">
+            <input
+              type="checkbox"
+              checked={requestMerge}
+              onChange={(event) => setRequestMerge(event.target.checked)}
+              data-testid="workbench-team-plan-request-merge"
+            />
+            <span style={{ color: "var(--text-muted)" }}>Request merge after approval</span>
+          </label>
+        </div>
+      )}
+
+      <details className="mt-2">
+        <summary
+          className="cursor-pointer text-token-xs"
+          style={{ color: "var(--text-muted)" }}
+        >
+          Prompt preview
+        </summary>
+        <pre
+          className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded px-2 py-1.5 text-token-xs"
+          style={{
+            background: "var(--bg-selected)",
+            color: "var(--text-muted)",
+          }}
+          data-testid="workbench-team-plan-prompt-preview"
+        >
+          {preparedPrompt}
+        </pre>
+      </details>
+
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onPrepareTeamWorkflow?.(preparedPrompt)}
+        className="mt-2 w-full rounded px-2 py-1.5 text-token-xs font-medium disabled:opacity-50"
+        style={{
+          background: "var(--accent)",
+          color: "var(--bg)",
+        }}
+        data-testid="workbench-team-plan-prepare"
+      >
+        Prepare in composer
+      </button>
+    </section>
+  );
+}
+
+function buildTeamWorkflowPrompt({
+  mode,
+  subject,
+  questions,
+  implementationPrompt,
+  verificationPrompt,
+  requestMerge,
+}: {
+  mode: TeamPlanTemplateMode;
+  subject: string;
+  questions: string;
+  implementationPrompt: string;
+  verificationPrompt: string;
+  requestMerge: boolean;
+}): string {
+  if (mode === "readonly") {
+    const parsedQuestions = questions
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return [
+      "请使用 run_workflow_template 工具执行一个受控的只读 Team review。",
+      "不要把它改写成普通对话，也不要启用写入、shell、browser、network 或 worktree 能力。",
+      "",
+      "templateId: team-readonly-review",
+      "params:",
+      JSON.stringify(
+        {
+          subject: subject.trim() || DEFAULT_TEAM_PLAN_REVIEW_SUBJECT,
+          questions:
+            parsedQuestions.length > 0
+              ? parsedQuestions
+              : ["What correctness risks remain?"],
+          requirePass: false,
+        },
+        null,
+        2
+      ),
+      "",
+      "完成后请只基于 workflow artifact / teamTask evidence / verifier checks 做综合，不要把 Team note 当作 test_result 或 browser_observation。",
+    ].join("\n");
+  }
+  return [
+    "请使用 run_workflow_template 工具执行一个 worktree 隔离的 Team implementation。",
+    "实现必须发生在 workflow-created worktree 内；合并回主工作区必须经过 workflow merge approval。",
+    "",
+    "templateId: team-worktree-implementation",
+    "params:",
+    JSON.stringify(
+      {
+        objective:
+          implementationPrompt.trim() ||
+          DEFAULT_TEAM_PLAN_IMPLEMENTATION_PROMPT,
+        implementationPrompt:
+          implementationPrompt.trim() ||
+          DEFAULT_TEAM_PLAN_IMPLEMENTATION_PROMPT,
+        verificationPrompt:
+          verificationPrompt.trim() ||
+          "Review the produced diff for correctness, missing tests, regressions, and unsupported claims.",
+        requestMerge,
+      },
+      null,
+      2
+    ),
+    "",
+    "完成后请引用 diff artifact、verification result 和 Team synthesis；不要把 worker 自述当作 deterministic test evidence。",
+  ].join("\n");
+}
+
+function TeamPlanSynthesis({
+  agentId,
+  synthesis,
+  onRefresh,
+}: {
+  agentId: string | null;
+  synthesis: TeamTaskSynthesisSummary;
+  onRefresh: () => Promise<void> | void;
+}) {
+  const [assistLoading, setAssistLoading] = useState(false);
+  const [assistError, setAssistError] = useState<TeamAssistUserError | null>(null);
+  const hasAssistance = Boolean(synthesis.assistance);
+  const requestAssist = useCallback(async () => {
+    if (!agentId || assistLoading) return;
+    setAssistLoading(true);
+    setAssistError(null);
+    try {
+      const res = await fetch(`/api/agent/${agentId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "team_synthesis_assist",
+          force: hasAssistance,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        userError?: TeamAssistUserError;
+      };
+      if (!res.ok) {
+        setAssistError(
+          json.userError ?? {
+            title: "Team assist failed",
+            message: json.error ?? `HTTP ${res.status}`,
+            actionLabel: "Retry",
+            retryable: true,
+          }
+        );
+        return;
+      }
+      await onRefresh();
+    } catch (error) {
+      setAssistError({
+        title: "Team assist failed",
+        message: error instanceof Error ? error.message : String(error),
+        actionLabel: "Retry",
+        retryable: true,
+      });
+    } finally {
+      setAssistLoading(false);
+    }
+  }, [agentId, assistLoading, hasAssistance, onRefresh]);
+  const assistMeta = synthesis.assistance
+    ? teamAssistMetaText(synthesis.assistance.meta)
+    : "";
+
+  return (
+    <section
+      className="rounded border p-2.5"
+      style={{
+        borderColor: "var(--border-soft)",
+        background: "var(--bg-panel)",
+      }}
+      data-testid="workbench-team-plan-synthesis"
+    >
+      <div className="mb-2 flex min-w-0 items-center gap-1.5">
+        <span
+          className="shrink-0 rounded px-1.5 py-0.5 text-token-xs font-medium"
+          style={{
+            background: "var(--bg-selected)",
+            color: teamPlanSynthesisStatusColor(synthesis.status),
+          }}
+        >
+          Synthesis
+        </span>
+        <span
+          className="min-w-0 truncate text-token-xs"
+          style={{ color: "var(--text-muted)" }}
+          title={synthesis.headline}
+        >
+          {synthesis.headline}
+        </span>
+        <button
+          type="button"
+          disabled={!agentId || assistLoading}
+          onClick={() => void requestAssist()}
+          className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-token-xs disabled:opacity-50"
+          style={{
+            background: "var(--bg-selected)",
+            color: "var(--accent)",
+          }}
+          data-testid="workbench-team-plan-synthesis-assist"
+        >
+          {assistLoading
+            ? hasAssistance
+              ? "Refreshing..."
+              : "Assisting..."
+            : hasAssistance
+              ? "Refresh assist"
+              : "LLM assist"}
+        </button>
+      </div>
+      {assistError ? (
+        <div
+          className="mb-2 rounded px-2 py-1.5 text-token-xs"
+          style={{
+            background: "var(--bg-selected)",
+            color: "var(--color-danger)",
+          }}
+          data-testid="workbench-team-plan-synthesis-assist-error"
+        >
+          <div className="font-medium">
+            {assistError.title ?? "Team assist failed"}
+          </div>
+          {assistError.message ? (
+            <div className="mt-0.5">{assistError.message}</div>
+          ) : null}
+          {assistError.actionLabel ? (
+            <div className="mt-0.5" style={{ color: "var(--text-muted)" }}>
+              {assistError.actionLabel}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {synthesis.assistance ? (
+        <div
+          className="mb-2 rounded px-2 py-1.5 text-token-xs"
+          style={{
+            background: "var(--bg-selected)",
+            color:
+              synthesis.assistance.status === "accepted"
+                ? "var(--accent)"
+                : "var(--color-warning)",
+          }}
+          data-testid="workbench-team-plan-synthesis-assistance"
+        >
+          LLM assist: {synthesis.assistance.status}
+          {assistMeta ? ` · ${assistMeta}` : ""}
+          {synthesis.assistance.warnings.length > 0
+            ? ` · ${synthesis.assistance.warnings[0]}`
+            : ""}
+        </div>
+      ) : null}
+      {synthesis.domains.length > 0 ? (
+        <div className="mb-2 flex min-w-0 flex-wrap gap-1">
+          {synthesis.domains.slice(0, 5).map((domain) => (
+            <span
+              key={domain}
+              className="rounded px-1.5 py-0.5 text-token-xs"
+              style={{
+                background: "var(--bg-selected)",
+                color: "var(--text-muted)",
+              }}
+            >
+              {domain}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="space-y-1">
+        {synthesis.items.slice(0, 6).map((item) => (
+          <TeamPlanSynthesisItem key={item.id} item={item} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function teamAssistMetaText(
+  meta: TeamTaskSynthesisAssistanceMeta | undefined
+): string {
+  if (!meta || typeof meta !== "object") return "";
+  const typed = meta as {
+    cached?: boolean;
+    model?: { provider: string; id: string; name?: string };
+    latencyMs?: number;
+    httpStatus?: number;
+    tokenCount?: number;
+    estimatedCost?: number;
+  };
+  const parts: string[] = [typed.cached ? "cached" : "fresh"];
+  if (typed.model) parts.push(`${typed.model.provider}/${typed.model.id}`);
+  if (typeof typed.latencyMs === "number") parts.push(`${typed.latencyMs}ms`);
+  if (typeof typed.httpStatus === "number") parts.push(`HTTP ${typed.httpStatus}`);
+  if (typeof typed.tokenCount === "number") parts.push(`${typed.tokenCount} tok`);
+  if (typeof typed.estimatedCost === "number") {
+    parts.push(`$${typed.estimatedCost.toFixed(4)}`);
+  }
+  return parts.join(" · ");
+}
+
+function TeamPlanSynthesisItem({ item }: { item: TeamTaskSynthesisItem }) {
+  return (
+    <div
+      className="rounded px-2 py-1.5"
+      style={{ background: "var(--bg-selected)" }}
+    >
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span
+          className="shrink-0 rounded px-1 py-0.5 text-token-xs"
+          style={{
+            color: teamPlanSynthesisSeverityColor(item.severity),
+            background: "var(--bg-panel)",
+          }}
+        >
+          {item.kind}
+        </span>
+        <span className="min-w-0 truncate text-token-xs font-medium" title={item.title}>
+          {item.title}
+        </span>
+      </div>
+      {item.detail ? (
+        <div
+          className="mt-0.5 line-clamp-2 text-token-xs"
+          style={{ color: "var(--text-muted)" }}
+          title={item.detail}
+        >
+          {item.detail}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TeamPlanTaskCard({
+  task,
+  evidenceById,
+}: {
+  task: TeamTask;
+  evidenceById: Map<string, EvidenceRef>;
+}) {
+  return (
+    <article
+      className="rounded border p-2.5"
+      style={{
+        borderColor: "var(--border-soft)",
+        background: "var(--bg-panel)",
+      }}
+      data-testid="workbench-team-plan-task"
+    >
+      <div className="flex min-w-0 items-start gap-2">
+        <span
+          className="mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-token-xs font-medium"
+          style={{
+            background: "var(--bg-selected)",
+            color: teamPlanTaskColor(task.status),
+          }}
+        >
+          {task.status}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium" title={task.title}>
+            {task.title}
+          </div>
+          <div
+            className="mt-0.5 truncate text-token-xs"
+            style={{ color: "var(--text-muted)" }}
+            title={teamPlanTaskSource(task)}
+          >
+            {task.ownerType}
+            {task.ownerId ? `:${task.ownerId}` : ""} · {teamPlanTaskSource(task)}
+          </div>
+        </div>
+      </div>
+
+      {task.contextPacket?.taskBoundary ? (
+        <div
+          className="mt-2 line-clamp-2 rounded px-2 py-1.5 text-token-xs"
+          style={{
+            background: "var(--bg-selected)",
+            color: "var(--text-muted)",
+          }}
+          title={task.contextPacket.taskBoundary}
+        >
+          {task.contextPacket.taskBoundary}
+        </div>
+      ) : null}
+
+      <TeamPlanChipRow
+        label="Write"
+        values={task.writePaths.length > 0 ? task.writePaths : ["read-only"]}
+      />
+      <TeamPlanChipRow
+        label="Required"
+        values={task.requiredEvidence.length > 0 ? task.requiredEvidence : ["not declared"]}
+      />
+      <TeamPlanChipRow
+        label="Evidence"
+        values={
+          task.evidenceIds.length > 0
+            ? task.evidenceIds.map((id) => evidenceById.get(id)?.title ?? id)
+            : ["pending"]
+        }
+      />
+
+      {task.blockedBy ? (
+        <div
+          className="mt-2 rounded px-2 py-1.5 text-token-xs"
+          style={{
+            background: "var(--bg-selected)",
+            color: "var(--color-warning)",
+          }}
+          title={task.blockedBy}
+        >
+          {task.blockedBy}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function TeamPlanChipRow({
+  label,
+  values,
+}: {
+  label: string;
+  values: string[];
+}) {
+  return (
+    <div className="mt-2 min-w-0">
+      <div
+        className="mb-1 text-token-xs uppercase"
+        style={{ color: "var(--text-muted)" }}
+      >
+        {label}
+      </div>
+      <div className="flex min-w-0 flex-wrap gap-1">
+        {values.slice(0, 8).map((value) => (
+          <span
+            key={`${label}:${value}`}
+            className="max-w-full truncate rounded px-1.5 py-0.5 text-token-xs"
+            style={{
+              background: "var(--bg-selected)",
+              color: "var(--text-muted)",
+            }}
+            title={value}
+          >
+            {value}
+          </span>
+        ))}
+        {values.length > 8 ? (
+          <span
+            className="rounded px-1.5 py-0.5 text-token-xs"
+            style={{
+              background: "var(--bg-selected)",
+              color: "var(--text-muted)",
+            }}
+          >
+            +{values.length - 8}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function teamPlanTaskColor(status: TeamTask["status"]): string {
+  if (status === "completed") return "var(--color-success)";
+  if (status === "failed") return "var(--color-danger)";
+  if (status === "warning" || status === "blocked") return "var(--color-warning)";
+  return "var(--accent)";
+}
+
+function teamPlanVerificationColor(
+  status: TeamTaskVerificationSummary["status"]
+): string {
+  if (status === "passed") return "var(--color-success)";
+  if (status === "warning") return "var(--color-warning)";
+  return "var(--color-danger)";
+}
+
+function teamPlanSynthesisStatusColor(status: TeamTaskSynthesisSummary["status"]): string {
+  if (status === "ready") return "var(--color-success)";
+  if (status === "warning") return "var(--color-warning)";
+  return "var(--color-danger)";
+}
+
+function teamPlanSynthesisSeverityColor(
+  severity: TeamTaskSynthesisItem["severity"]
+): string {
+  if (severity === "danger") return "var(--color-danger)";
+  if (severity === "warning") return "var(--color-warning)";
+  return "var(--accent)";
+}
+
+function teamPlanTaskSource(task: TeamTask): string {
+  if (task.batchId) return `batch ${task.batchId}`;
+  if (task.workflowId) return `workflow ${task.workflowId}`;
+  return task.source.parentId
+    ? `${task.source.type} ${task.source.parentId}/${task.source.id}`
+    : `${task.source.type} ${task.source.id}`;
+}
+
+function ExecutionModeMiniStrip({ summary }: { summary: ExecutionModeSummary }) {
+  const color =
+    summary.tone === "warning"
+      ? "var(--color-warning)"
+      : summary.tone === "running"
+        ? "var(--accent)"
+        : "var(--text-muted)";
+  const confidence = `${Math.round(summary.confidence * 100)}%`;
+  return (
+    <div
+      className="mt-2 rounded border px-2 py-1.5"
+      style={{
+        borderColor: "var(--border-soft)",
+        background: "var(--bg-selected)",
+      }}
+      data-testid="workbench-execution-mode"
+      title={`${summary.detail} ${summary.contextBoundary}`}
+    >
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span
+          className="shrink-0 rounded px-1.5 py-0.5 text-token-xs font-medium"
+          style={{ background: "var(--bg-panel)", color }}
+          data-testid="workbench-execution-mode-label"
+        >
+          {summary.label}
+        </span>
+        <span
+          className="min-w-0 truncate text-token-xs"
+          style={{ color: "var(--text-muted)" }}
+          data-testid="workbench-execution-mode-detail"
+        >
+          {summary.advisoryOnly ? "建议" : "执行中"} · {confidence} · {summary.permissionProfile}
+        </span>
+      </div>
+      <div
+        className="mt-1 truncate text-token-xs"
+        style={{ color: "var(--text-muted)" }}
+      >
+        {summary.contextBoundary}
+      </div>
+    </div>
+  );
+}
+
+function GoalStateMetric({
+  label,
+  value,
+  tone,
+  testId,
+}: {
+  label: string;
+  value: string;
+  tone?: "done" | "warning";
+  testId: string;
+}) {
+  return (
+    <div
+      className="min-w-0 rounded px-2 py-1.5"
+      style={{ background: "var(--bg-selected)" }}
+      data-testid={testId}
+    >
+      <div
+        className="truncate text-token-xs"
+        style={{ color: "var(--text-muted)" }}
+      >
+        {label}
+      </div>
+      <div
+        className="mt-0.5 truncate font-mono text-token-xs font-semibold"
+        style={{
+          color:
+            tone === "warning"
+              ? "var(--color-warning)"
+              : tone === "done"
+                ? "var(--color-success)"
+                : "var(--text)",
+        }}
+        title={value}
+      >
+        {value}
+      </div>
+    </div>
   );
 }
 
@@ -1332,6 +2647,8 @@ function OverviewLine({
   struck?: boolean;
   tone?: "running" | "done" | "error";
 }) {
+  const visiblePrimary = shortDisplayText(primary, 96);
+  const visibleSecondary = secondary ? shortDisplayText(secondary, 120) : undefined;
   const color =
     tone === "error" ? "var(--color-danger)" : tone === "running" ? "var(--color-warning)" : "var(--text-muted)";
   return (
@@ -1342,18 +2659,18 @@ function OverviewLine({
       <span className="min-w-0 flex-1">
         <span
           className="block truncate"
-          title={primary}
+          title={visiblePrimary}
           style={{
             color: struck ? "var(--text-muted)" : "var(--text)",
-            textDecoration: struck ? "line-through" : undefined,
+            textDecorationLine: struck ? "line-through" : undefined,
             textDecorationColor: "var(--text-muted)",
           }}
         >
-          {primary}
+          {visiblePrimary}
         </span>
-        {secondary ? (
-          <span className="block truncate text-token-xs" title={secondary} style={{ color }}>
-            {secondary}
+        {visibleSecondary ? (
+          <span className="block truncate text-token-xs" title={visibleSecondary} style={{ color }}>
+            {visibleSecondary}
           </span>
         ) : null}
       </span>
@@ -1545,6 +2862,7 @@ function ContextDetail({
   providerLabel,
   modelLabel,
   thinkingLabel,
+  runtimeProfile,
   toolsCount,
   pendingFileCount,
   pendingImageCount,
@@ -1557,6 +2875,7 @@ function ContextDetail({
   providerLabel: string;
   modelLabel: string;
   thinkingLabel: string;
+  runtimeProfile: AgentRuntimeProfile | null;
   toolsCount: number;
   pendingFileCount: number;
   pendingImageCount: number;
@@ -1569,6 +2888,8 @@ function ContextDetail({
     ["browserId", runtimeIdentity.browserId],
     ["provider", providerLabel || "n/a"],
     ["model", modelLabel || "n/a"],
+    ["runtime", runtimeProfile?.label ?? "SDK-backed agent"],
+    ["runtime detail", runtimeProfile?.details ?? "Full structured runtime"],
     ["thinking", thinkingLabel],
     ["context", stats?.ctxPct != null ? `${(stats.ctxPct * 100).toFixed(1)}%` : "n/a"],
     ["budget", budgetStatus.triggered.length > 0 ? budgetStatus.triggered.join(", ") : "ok"],
@@ -1609,7 +2930,241 @@ function shortDisplayText(value: string, max = 80): string {
   return `${compact.slice(0, Math.max(0, max - 1))}...`;
 }
 
-function summarizePrimaryArtifact(artifacts: ProgressArtifact[]): string {
+type GoalStateTone = "idle" | "running" | "done" | "warning" | "error";
+
+interface GoalStateSummary {
+  objective: string;
+  artifact: string;
+  statusLabel: string;
+  tone: GoalStateTone;
+  requiredLabel: string;
+  verifiedLabel: string;
+  missingLabel: string;
+  missing: string[];
+  detail?: string;
+}
+
+function summarizeGoalState({
+  payload,
+  contract,
+  progress,
+  streaming,
+}: {
+  payload: WorkbenchGoalStatePayload | null;
+  contract: ExecutionContractSummary | null;
+  progress: AgentProgress | null;
+  streaming: boolean;
+}): GoalStateSummary | null {
+  const goal = payload?.goal ?? null;
+  const effectiveContract = payload?.contract ?? contract;
+  const artifacts = progress?.artifacts ?? [];
+  if (!goal && !effectiveContract && artifacts.length === 0) return null;
+
+  const required = [
+    ...new Set([
+      ...(effectiveContract?.requiredEvidence ?? []),
+      ...artifacts.flatMap((artifact) => artifact.requiredEvidence ?? []),
+    ]),
+  ];
+  const ledgerEvidence = payload?.ledgerEvidence ?? [];
+  const evaluation = goal?.lastEvaluation;
+  const closure = payload?.lastClosure ?? goal?.lastClosure ?? null;
+  const passedEvidenceIds = new Set(
+    evaluation?.criteria
+      .filter((criterion) => criterion.status === "pass")
+      .flatMap((criterion) => criterion.evidenceIds ?? []) ?? []
+  );
+  const verifiedRequired = required.filter((requirement) =>
+    ledgerEvidence.some((evidence) =>
+      evidenceMatchesRequiredEvidence(evidence, requirement, passedEvidenceIds)
+    )
+  );
+  const allRequiredVerified =
+    required.length > 0 &&
+    (verifiedRequired.length === required.length ||
+      (evaluation?.status === "passed" &&
+        (evaluation.missingEvidence?.length ?? 0) === 0));
+  const missingFromEvaluation = [
+    ...(closure?.missingEvidence ?? []),
+    ...(evaluation?.missingEvidence ?? []),
+  ];
+  const inferredMissing = allRequiredVerified
+    ? []
+    : required.filter((item) => !verifiedRequired.includes(item));
+  const missing = [
+    ...new Set(
+      (missingFromEvaluation.length > 0
+        ? missingFromEvaluation
+        : inferredMissing
+      ).filter(Boolean)
+    ),
+  ];
+  const status = summarizeGoalRuntimeStatus({
+    goal,
+    closure,
+    streaming,
+    missingCount: missing.length,
+  });
+  const requiredLabel =
+    required.length > 0
+      ? shortDisplayText(required.slice(0, 2).join(", "), 36) +
+        (required.length > 2 ? ` +${required.length - 2}` : "")
+      : "未声明";
+  const verifiedCount = allRequiredVerified
+    ? required.length
+    : verifiedRequired.length;
+  return {
+    objective:
+      effectiveContract?.objective ?? goal?.objective ?? "当前任务未声明目标",
+    artifact: summarizePrimaryArtifact(effectiveContract, artifacts),
+    statusLabel: status.label,
+    tone: status.tone,
+    requiredLabel,
+    verifiedLabel:
+      required.length > 0 ? `${verifiedCount}/${required.length}` : "n/a",
+    missingLabel: missing.length > 0 ? String(missing.length) : "0",
+    missing,
+    detail:
+      closure?.nextAction ??
+      evaluation?.nextAction ??
+      (streaming ? "Agent 正在执行，等待新的验证证据。" : undefined),
+  };
+}
+
+function summarizeGoalRuntimeStatus({
+  goal,
+  closure,
+  streaming,
+  missingCount,
+}: {
+  goal: AgentGoal | null;
+  closure: GoalRunClosure | null;
+  streaming: boolean;
+  missingCount: number;
+}): { label: string; tone: GoalStateTone } {
+  if (goal?.status === "complete") return { label: "已完成", tone: "done" };
+  if (goal?.status === "blocked") return { label: "已阻塞", tone: "error" };
+  if (closure?.verdict === "blocked") return { label: "已阻塞", tone: "error" };
+  if (closure?.verdict === "needs_user") {
+    return { label: "等待用户", tone: "warning" };
+  }
+  if (closure?.verdict === "ready_to_finalize") {
+    return { label: "可收尾", tone: "done" };
+  }
+  if (goal?.status === "paused") return { label: "已暂停", tone: "warning" };
+  if (streaming) return { label: "运行中", tone: "running" };
+  if (missingCount > 0) return { label: "缺证据", tone: "warning" };
+  if (goal?.status === "active") return { label: "待验证", tone: "running" };
+  return { label: "空闲", tone: "idle" };
+}
+
+function goalStateToneColor(tone: GoalStateTone): string {
+  if (tone === "done") return "var(--color-success)";
+  if (tone === "warning") return "var(--color-warning)";
+  if (tone === "error") return "var(--color-danger)";
+  if (tone === "running") return "var(--accent)";
+  return "var(--text-muted)";
+}
+
+function evidenceMatchesRequiredEvidence(
+  evidence: EvidenceRef,
+  requirement: string,
+  passedEvidenceIds: Set<string>
+): boolean {
+  const required = normalizeEvidenceToken(requirement);
+  if (!required || required === "goal_evidence" || required === "evidence") {
+    return true;
+  }
+  if (!evidenceCanCountAsVerified(evidence, passedEvidenceIds)) return false;
+  const metadataKind =
+    typeof evidence.metadata?.kind === "string" ? evidence.metadata.kind : "";
+  const metadataRequirements = Array.isArray(evidence.metadata?.evidenceRequired)
+    ? evidence.metadata.evidenceRequired.filter(
+        (item): item is string => typeof item === "string"
+      )
+    : [];
+  const haystack = [
+    evidence.id,
+    evidence.kind,
+    evidence.title,
+    evidence.summary,
+    evidence.textPreview,
+    evidence.url,
+    evidence.filePath,
+    evidence.artifactUri,
+    evidence.source?.type,
+    evidence.source?.id ?? undefined,
+    metadataKind,
+    ...metadataRequirements,
+  ]
+    .filter((item): item is string => Boolean(item))
+    .map(normalizeEvidenceToken);
+  if (metadataRequirements.some((item) => normalizeEvidenceToken(item).includes(required))) {
+    return true;
+  }
+  if (required.includes("browser")) {
+    return (
+      evidence.kind.startsWith("browser_") ||
+      evidence.source?.type === "browser" ||
+      haystack.some((item) => item.includes("browser"))
+    );
+  }
+  if (required.includes("test") || required.includes("type")) {
+    return haystack.some(
+      (item) =>
+        item.includes("test") ||
+        item.includes("typecheck") ||
+        item.includes("verification_result")
+    );
+  }
+  if (required.includes("lint")) {
+    return haystack.some((item) => item.includes("lint"));
+  }
+  if (required.includes("build")) {
+    return haystack.some((item) => item.includes("build"));
+  }
+  if (required.includes("diff")) {
+    return haystack.some((item) => item.includes("diff"));
+  }
+  if (required.includes("screenshot")) {
+    return haystack.some(
+      (item) => item.includes("screenshot") || item.includes("browser_snapshot")
+    );
+  }
+  return haystack.some((item) => item.includes(required));
+}
+
+function evidenceCanCountAsVerified(
+  evidence: EvidenceRef,
+  passedEvidenceIds: Set<string>
+): boolean {
+  if (passedEvidenceIds.size > 0 && passedEvidenceIds.has(evidence.id)) {
+    return true;
+  }
+  const outcome =
+    typeof evidence.metadata?.outcome === "string"
+      ? evidence.metadata.outcome
+      : typeof evidence.metadata?.status === "string"
+        ? evidence.metadata.status
+        : undefined;
+  if (outcome === "failed" || outcome === "timed_out") return false;
+  if (typeof evidence.metadata?.passed === "boolean") {
+    return evidence.metadata.passed;
+  }
+  return true;
+}
+
+function normalizeEvidenceToken(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function summarizePrimaryArtifact(
+  contract: ExecutionContractSummary | null,
+  artifacts: ProgressArtifact[]
+): string {
+  if (contract?.mainArtifact) {
+    return shortDisplayText(contract.mainArtifact.label, 48);
+  }
   const candidate = artifacts.find(
     (artifact) =>
       artifact.title !== "任务契约" &&
@@ -1663,7 +3218,7 @@ function summarizeProgressCockpit(
   const currentGroup = groups.at(-1);
   const steps = currentGroup?.steps ?? [];
   const artifacts = progress?.artifacts ?? [];
-  const artifactLabel = summarizePrimaryArtifact(artifacts);
+  const artifactLabel = summarizePrimaryArtifact(contract, artifacts);
   const evidenceLabel = summarizeRequiredEvidence(contract, artifacts);
   const contractLabel = contract?.rubricProfile ?? "未生成";
   const total = steps.length;
@@ -1878,6 +3433,7 @@ function viewTitle(type: WorkbenchView["type"]) {
   if (type === "outputs") return "Outputs";
   if (type === "files") return "Files";
   if (type === "context") return "Context";
+  if (type === "team") return "Team";
   return "Browser";
 }
 
@@ -1941,6 +3497,15 @@ function tabFromView(view: WorkbenchView): WorkbenchTab {
       closable: true,
     };
   }
+  if (view.type === "team") {
+    return {
+      id: "team",
+      kind: "team",
+      title: "Team",
+      subtitle: "Team Plan",
+      closable: true,
+    };
+  }
   const url = view.url?.trim();
   return {
     id: url ? `browser:${url}` : "browser:launcher",
@@ -1958,6 +3523,7 @@ function viewFromTab(tab: WorkbenchTab): WorkbenchView {
   if (tab.kind === "outputs") return { type: "outputs" };
   if (tab.kind === "files") return { type: "files", path: tab.path };
   if (tab.kind === "context") return { type: "context" };
+  if (tab.kind === "team") return { type: "team" };
   if (tab.kind === "browser") return { type: "browser", url: tab.url };
   return { type: "overview" };
 }
@@ -2026,6 +3592,7 @@ function isWorkbenchTabKind(kind: string): kind is WorkbenchTabKind {
     "outputs",
     "files",
     "context",
+    "team",
     "browser",
     "terminal",
     "sidechat",
@@ -2036,6 +3603,7 @@ function viewTitleFromTabKind(kind: WorkbenchTabKind): string {
   if (kind === "home") return "概览";
   if (kind === "terminal") return "终端";
   if (kind === "sidechat") return "侧边聊天";
+  if (kind === "team") return "Team";
   return viewTitle(kind);
 }
 
@@ -2045,6 +3613,7 @@ function tabIcon(kind: WorkbenchTabKind) {
   if (kind === "outputs") return Boxes;
   if (kind === "files") return FolderOpen;
   if (kind === "context") return FileText;
+  if (kind === "team") return Boxes;
   if (kind === "browser") return Globe;
   if (kind === "terminal") return Terminal;
   return MessageSquare;

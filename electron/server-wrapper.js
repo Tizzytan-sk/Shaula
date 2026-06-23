@@ -66,9 +66,8 @@ for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
 // 打包后 fork 时 cwd 可能是 `/`，不切的话静态资源 404
 //
 // asar 启用后 ENTRY = .../app.asar/.next/standalone/server.js（虚拟路径，asar 内 require 正常工作，
-// 但 chdir 进 asar 虚拟目录在 macOS 上会 ENOENT）。
-// 解决：chdir 失败时，尝试 unpacked 等价路径；再失败就用 app.asar 同级的 Resources 目录兜底
-// （Next standalone 只需要 cwd 能拼出 `.next/static` 等绝对路径，能 readFile 就行）。
+// 但 chdir 进 asar 虚拟目录会失败）。优先 chdir 到 app.asar.unpacked 的等价物理目录；
+// Next standalone 只需要 cwd 能拼出 `.next/static` 等绝对路径，能 readFile 就行。
 const path = require("node:path");
 const standaloneDir = path.dirname(ENTRY);
 
@@ -83,15 +82,16 @@ function tryChdir(dir, label) {
   }
 }
 
-if (!tryChdir(standaloneDir, "asar")) {
-  // asar 虚拟路径 chdir 不行，转 unpacked
-  const unpacked = standaloneDir.replace(
-    `app.asar${path.sep}`,
-    `app.asar.unpacked${path.sep}`
-  );
-  if (unpacked !== standaloneDir) {
-    tryChdir(unpacked, "unpacked");
+const unpackedStandaloneDir = standaloneDir.replace(
+  `app.asar${path.sep}`,
+  `app.asar.unpacked${path.sep}`
+);
+if (unpackedStandaloneDir !== standaloneDir) {
+  if (!tryChdir(unpackedStandaloneDir, "unpacked")) {
+    tryChdir(standaloneDir, "asar");
   }
+} else {
+  tryChdir(standaloneDir, "standalone");
 }
 
 // asar 启用后的关键 patch：Next standalone server.js 自己会执行

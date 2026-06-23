@@ -14,6 +14,18 @@ const GoalUpdateParams = Type.Object({
       description: "Short blocker description when status is blocked.",
     })
   ),
+  finalSummary: Type.Optional(
+    Type.String({
+      description:
+        "Draft final handoff summary when status is complete. Cite the concrete evidence in evidenceIds.",
+    })
+  ),
+  evidenceIds: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Recorded evidence ids that support the final summary when status is complete.",
+    })
+  ),
 });
 
 export interface GoalExtensionOptions {
@@ -36,7 +48,7 @@ export function createGoalExtension(opts: GoalExtensionOptions): ExtensionFactor
         promptSnippet:
           "goal_update: mark the active goal complete or blocked with structured status.",
         promptGuidelines: [
-          "When an active goal is fully achieved, call goal_update with status=complete before your final summary.",
+          "When an active goal is fully achieved, call goal_update with status=complete before your final summary and include finalSummary plus supporting evidenceIds.",
           "Use status=blocked only when you cannot make meaningful progress without user input or an external change.",
           "Do not mark a goal complete only because one subtask finished; check the full objective.",
         ],
@@ -55,6 +67,8 @@ export function createGoalExtension(opts: GoalExtensionOptions): ExtensionFactor
           const result = await opts.onGoalUpdate(agentId, {
             status: params.status,
             blockedReason: params.blockedReason,
+            finalSummary: params.finalSummary,
+            evidenceIds: params.evidenceIds,
           });
 
           let text: string;

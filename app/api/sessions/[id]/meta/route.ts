@@ -12,6 +12,7 @@
  */
 
 import { NextResponse } from "next/server";
+import { assertApiAccess } from "@/lib/api-boundary";
 import { readMeta, writeMeta } from "@/lib/meta/store";
 import {
   META_WRITABLE_FIELDS_V0,
@@ -57,9 +58,11 @@ function pickWritable(body: unknown): Partial<SessionMeta> {
 }
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const { id } = await params;
   try {
     const meta = await readMeta(id);
@@ -76,6 +79,8 @@ export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const { id } = await params;
   try {
     const body = await req.json().catch(() => ({}));

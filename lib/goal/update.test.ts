@@ -131,7 +131,11 @@ describe("applyGoalUpdate (verifier integration)", () => {
       createdAt: Date.now(),
     });
 
-    const result = applyGoalUpdate("agent-1", { status: "complete" });
+    const result = applyGoalUpdate("agent-1", {
+      status: "complete",
+      finalSummary: "The work is complete and tests pass.",
+      evidenceIds: ["ev-1"],
+    });
 
     expect(result.accepted).toBe(true);
     expect(result.rejectionNote).toBeUndefined();
@@ -140,9 +144,64 @@ describe("applyGoalUpdate (verifier integration)", () => {
     expect(stored?.status).toBe("complete");
     expect(stored?.completedAt).toBeTypeOf("number");
     expect(stored?.lastEvaluation?.status).toBe("passed");
+    expect(stored?.lastCompletionClaim).toEqual({
+      finalSummary: "The work is complete and tests pass.",
+      evidenceIds: ["ev-1"],
+    });
+    expect(stored?.lastFinalMessageAudit).toBeUndefined();
     expect(stored?.lastEvaluation?.totalScore).toBeGreaterThanOrEqual(
       stored?.lastEvaluation?.targetScore ?? 1
     );
+  });
+
+  it("rejects complete when the structured final summary cites missing evidence", () => {
+    setGoal("agent-1", "Do the thing");
+    addGoalEvidence("agent-1", {
+      id: "ev-1",
+      kind: "test",
+      title: "tests pass",
+      createdAt: Date.now(),
+    });
+
+    const result = applyGoalUpdate("agent-1", {
+      status: "complete",
+      finalSummary: "The work is complete.",
+      evidenceIds: ["missing-proof"],
+    });
+
+    expect(result.accepted).toBe(false);
+    expect(result.rejectionNote).toContain("unknown evidence id");
+    expect(result.evaluation?.hardFails).toContain("final-summary-evidence");
+    expect(getGoal("agent-1")?.status).toBe("active");
+  });
+
+  it("rejects contracted complete without a structured final summary", () => {
+    const contract = putExecutionContract({
+      ...buildExecutionContract({
+        agentId: "agent-1",
+        objective: "Check the local UI",
+        createdAt: 1,
+      }),
+      requiredEvidence: ["browser_observation"],
+    });
+    const goal = setGoal("agent-1", "Check the local UI", undefined, {
+      contractId: contract.id,
+    });
+    appendEvidence({
+      id: "browser-proof",
+      kind: "browser_step",
+      title: "Browser observed local UI",
+      agentId: "agent-1",
+      browserId: "agent:agent-1",
+      createdAt: goal.createdAt + 1,
+    });
+
+    const result = applyGoalUpdate("agent-1", { status: "complete" });
+
+    expect(result.accepted).toBe(false);
+    expect(result.rejectionNote).toContain("Structured final summary is required");
+    expect(result.evaluation?.hardFails).toContain("final-summary-evidence");
+    expect(getGoal("agent-1")?.status).toBe("active");
   });
 
   it("accepts trusted ledger evidence for a contract requirement", () => {
@@ -166,11 +225,93 @@ describe("applyGoalUpdate (verifier integration)", () => {
       createdAt: goal.createdAt + 1,
     });
 
-    const result = applyGoalUpdate("agent-1", { status: "complete" });
+    const result = applyGoalUpdate("agent-1", {
+      status: "complete",
+      finalSummary: "Browser verification observed the local UI.",
+      evidenceIds: ["browser-proof"],
+    });
 
     expect(result.accepted).toBe(true);
     expect(result.evaluation?.status).toBe("passed");
     expect(getGoal("agent-1")?.status).toBe("complete");
+  });
+
+  it("rejects failed browser ledger evidence for a browser contract requirement", () => {
+    const contract = putExecutionContract({
+      ...buildExecutionContract({
+        agentId: "agent-1",
+        objective: "Check the local UI",
+        createdAt: 1,
+      }),
+      requiredEvidence: ["browser_observation"],
+    });
+    const goal = setGoal("agent-1", "Check the local UI", undefined, {
+      contractId: contract.id,
+    });
+    appendEvidence({
+      id: "browser-failed",
+      kind: "browser_step",
+      title: "Browser verification failed",
+      agentId: "agent-1",
+      browserId: "agent:agent-1",
+      metadata: {
+        status: "done",
+        passed: false,
+      },
+      createdAt: goal.createdAt + 1,
+    });
+
+    const result = applyGoalUpdate("agent-1", { status: "complete" });
+
+    expect(result.accepted).toBe(false);
+    expect(result.rejectionNote).toContain("NOT accepted");
+    expect(result.evaluation?.status).toBe("failed");
+    expect(getGoal("agent-1")?.status).toBe("active");
+  });
+
+  it("opens a review action for out-of-scope diff evidence without blocking completion", () => {
+    const contract = putExecutionContract({
+      ...buildExecutionContract({
+        agentId: "agent-1",
+        objective: "Ship scoped change",
+        createdAt: 1,
+      }),
+      scope: ["Only edit `C:/repo/src`."],
+      requiredEvidence: ["diff"],
+    });
+    const goal = setGoal("agent-1", "Ship scoped change", undefined, {
+      contractId: contract.id,
+    });
+    appendEvidence({
+      id: "outside-diff",
+      kind: "progress_artifact",
+      title: "scripts/tool.ts diff",
+      agentId: "agent-1",
+      metadata: {
+        kind: "diff",
+        href: "C:/repo/scripts/tool.ts",
+        cwd: "C:/repo",
+      },
+      createdAt: goal.createdAt + 1,
+    });
+
+    const result = applyGoalUpdate("agent-1", {
+      status: "complete",
+      finalSummary: "Scoped diff is complete; review outside-scope finding.",
+      evidenceIds: ["outside-diff"],
+    });
+
+    expect(result.accepted).toBe(true);
+    expect(result.evaluation?.status).toBe("warning");
+    expect(getGoal("agent-1")?.status).toBe("complete");
+    expect(listEvaluationActions({ agentId: "agent-1", kind: "triggered_pitfall" })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "open",
+          target: expect.stringContaining("out-of-scope diff"),
+        }),
+      ])
+    );
   });
 
   it("ignores failed workflows created before the active goal", () => {

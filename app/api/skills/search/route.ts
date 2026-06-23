@@ -11,6 +11,7 @@
  * 排序：按 installs 降序。
  */
 import { NextResponse, type NextRequest } from "next/server";
+import { assertApiAccess } from "@/lib/api-boundary";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -52,6 +53,8 @@ function installsRank(s: string): number {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   try {
     const body = (await req.json()) as { query?: string; limit?: number };
     const query = (body?.query ?? "").trim();

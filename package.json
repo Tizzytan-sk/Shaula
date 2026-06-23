@@ -66,6 +66,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "benchmark:shaula": "vitest run lib/skill-eval/runner.test.ts lib/dogfood/goal-run-set.test.ts lib/subagents/write-boundary.test.ts lib/workflows/script-runtime.test.ts lib/local-coding-assistant/adapter.test.ts scripts/provider-dogfood.test.mjs",
     "dogfood:provider": "node scripts/provider-dogfood.mjs",
     "workflow:sandbox:check": "node scripts/check-workflow-sandbox.mjs",
     "electron:dev": "node scripts/run-electron-dev.mjs",
@@ -74,7 +75,10 @@
     "electron:build": "npm run clean && npm run build:electron && node scripts/build-electron.mjs",
     "electron:build:mac": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --mac --arm64",
     "electron:build:win": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --win nsis --x64",
-    "electron:build:win:unsigned": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --win nsis --x64 --config.win.signAndEditExecutable=false"
+    "electron:build:win:unsigned": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --win nsis --x64 --config.win.signAndEditExecutable=false",
+    "release:acceptance:win": "node scripts/release-acceptance-win.mjs",
+    "release:acceptance:win:unpacked": "node scripts/release-acceptance-win.mjs",
+    "release:acceptance:win:install": "node scripts/release-acceptance-win.mjs --install"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.78.0",

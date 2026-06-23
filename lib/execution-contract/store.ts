@@ -13,6 +13,8 @@ import {
   EXECUTION_CONTRACT_VERSION,
   type ExecutionAcceptanceCriterion,
   type ExecutionContract,
+  type ExecutionMainArtifact,
+  type ExecutionMainArtifactKind,
   type ExecutionProfileSelection,
 } from "./types";
 
@@ -98,6 +100,39 @@ function sanitizeProfileSelection(value: unknown): ExecutionProfileSelection | u
   };
 }
 
+function isMainArtifactKind(value: unknown): value is ExecutionMainArtifactKind {
+  return (
+    value === "file" ||
+    value === "directory" ||
+    value === "url" ||
+    value === "route" ||
+    value === "other"
+  );
+}
+
+function sanitizeMainArtifact(value: unknown): ExecutionMainArtifact | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const src = value as Record<string, unknown>;
+  const label = typeof src.label === "string" ? src.label.trim().slice(0, 500) : "";
+  if (!label) return undefined;
+  const source =
+    src.source === "explicit" ||
+    src.source === "attachment" ||
+    src.source === "scope" ||
+    src.source === "objective" ||
+    src.source === "inferred"
+      ? src.source
+      : "inferred";
+  return {
+    kind: isMainArtifactKind(src.kind) ? src.kind : "other",
+    label,
+    ...(typeof src.href === "string" && src.href.trim()
+      ? { href: src.href.trim().slice(0, 1000) }
+      : {}),
+    source,
+  };
+}
+
 function sanitizeContract(raw: unknown): ExecutionContract | null {
   if (!raw || typeof raw !== "object") return null;
   const src = raw as Record<string, unknown>;
@@ -114,6 +149,7 @@ function sanitizeContract(raw: unknown): ExecutionContract | null {
     nonGoals: cleanStringArray(src.nonGoals),
     acceptanceCriteria: sanitizeCriteria(src.acceptanceCriteria),
     requiredEvidence: cleanStringArray(src.requiredEvidence),
+    mainArtifact: sanitizeMainArtifact(src.mainArtifact),
     rubricProfile:
       typeof src.rubricProfile === "string" && src.rubricProfile
         ? src.rubricProfile

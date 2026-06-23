@@ -9,12 +9,15 @@
  * 只允许通过 CLI `pi login` 来 OAuth。
  */
 import { NextResponse } from "next/server";
+import { assertApiAccess } from "@/lib/api-boundary";
 import { getAuth, getModelRegistry } from "@/lib/agent-registry";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   try {
     const auth = getAuth();
     const mr = getModelRegistry();
@@ -57,6 +60,8 @@ export async function GET() {
 }
 
 export async function PUT(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   try {
     const body = (await req.json()) as {
       provider?: string;
@@ -82,6 +87,8 @@ export async function PUT(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   try {
     const url = new URL(req.url);
     const provider = url.searchParams.get("provider");

@@ -24,11 +24,32 @@ describe("skill eval suite runner", () => {
       ["task-a-typecheck-fallback", "pass"],
       ["task-b-readonly-verifier-dirty-json", "pass"],
       ["task-c-route-decision-visibility", "pass"],
+      ["p3-router-shadow-visibility", "pass"],
+      ["p3-whiteboard-fake-evidence-rejected", "pass"],
+      ["team-readonly-conflict-synthesis", "pass"],
+      ["team-domain-aware-synthesis", "pass"],
+      ["team-llm-assisted-synthesis-guardrail", "pass"],
+      ["team-llm-assisted-synthesis-cache", "pass"],
+      ["workflow-team-template-readonly", "pass"],
+      ["workflow-team-worktree-implementation", "pass"],
+      ["workflow-team-capability-deny", "pass"],
+      ["provider-team-tool-isolation", "pass"],
+      ["p2-coding-diff-success", "pass"],
+      ["p2-premature-completion-rejection", "pass"],
+      ["p2-failed-required-check", "pass"],
+      ["p2-needs-user-pause", "pass"],
+      ["p2-blocked-pause", "pass"],
+      ["p2-browser-observation", "pass"],
+      ["p2-subagent-write-boundary", "pass"],
+      ["p2-workflow-worktree-merge-approval", "pass"],
+      ["p2-local-cli-shim", "pass"],
     ]);
     expect(run.weightedScore).toBe(1);
     expect(run.evaluation.status).toBe("passed");
     expect(run.metrics).toMatchObject({
-      verifierRejectionCount: 3,
+      verifierRejectionCount: 7,
+      openActionCount: 7,
+      browserEvidence: ["browser-evidence"],
     });
   });
 
@@ -48,7 +69,7 @@ describe("skill eval suite runner", () => {
       createdAt: 100,
     });
 
-    expect(run.failCount).toBe(3);
+    expect(run.failCount).toBe(22);
     expect(
       run.results.find((item) => item.caseId === "preflight-evidence-ledger")
         ?.reason

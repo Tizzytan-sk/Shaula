@@ -29,6 +29,7 @@ describe("execution contract store", () => {
       buildExecutionContract({
         agentId: "agent-1",
         objective: "Do the work",
+        mainArtifact: "docs/plan.md",
         createdAt: 1,
       })
     );
@@ -41,7 +42,14 @@ describe("execution contract store", () => {
 
     __resetExecutionContractStoreForTest();
 
-    expect(getExecutionContract(contract.id)?.objective).toBe("Do the work");
+    expect(getExecutionContract(contract.id)).toMatchObject({
+      objective: "Do the work",
+      mainArtifact: {
+        kind: "file",
+        label: "docs/plan.md",
+        source: "explicit",
+      },
+    });
     expect(listExecutionContracts({ agentId: "agent-1" })).toHaveLength(1);
   });
 

@@ -12,53 +12,28 @@ import {
   createAgentSession,
   type AgentSession,
   type AgentSessionEvent,
-  type ToolDefinition,
-  SessionManager,
   ModelRegistry,
   AuthStorage,
   SettingsManager,
   DefaultPackageManager,
-  DefaultResourceLoader,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import os from "node:os";
-import { createCollabExtension } from "./collab/extension";
-import { createClarificationExtension } from "./clarification/extension";
-import { createBrowserExtension } from "./browser/extension";
 import { disposeBrowser } from "./browser/runtime";
 import { agentBrowserId } from "./browser/browser-id";
-import { createClipboardExtension } from "./clipboard/extension";
-import { createGoalExtension } from "./goal/extension";
-import { createProgressExtension } from "./progress/extension";
-import { createShaulaShellExtension } from "./shaula-shell-extension";
-import { createDelegateSubagentsTool } from "./subagents/extension";
-import { createSubagentWriteBoundaryExtension } from "./subagents/write-boundary-extension";
 import {
   abortRunningSubagentBatches,
-  runSubagentBatch,
 } from "./subagents/orchestrator";
-import {
-  createDynamicWorkflowTool,
-  createWorkflowScriptTool,
-} from "./workflows/extension";
-import { runDynamicWorkflow } from "./workflows/orchestrator";
-import { runWorkflowScript } from "./workflows/script-runtime";
 import { abortRunningWorkflows } from "./workflows/server-store";
-import { createGitWorktreeManager } from "./workflows/git-worktree";
-import { getWorkflowNetworkPolicy } from "./workflows/network-policy";
-import { DEFAULT_RULES } from "./collab/rules";
 import {
   clearSessionRemember,
-  hasSessionRemember,
   listPendingApprovals,
-  registerPendingApproval,
 } from "./collab/server-store";
 import {
   clearAgentClarifications,
   listPendingClarifications,
-  registerPendingClarification,
 } from "./clarification/server-store";
 import {
   buildGoalRecap,
@@ -70,58 +45,72 @@ import {
   setGoalStatus,
   startGoalTurn,
 } from "./goal/server-store";
-import {
-  buildGoalClosurePromptFragment,
-} from "./goal/closure";
 import { evaluateAndStoreGoalRunClosure } from "./goal/closure-store";
-import { applyGoalUpdate } from "./goal/update";
-import { shouldStopRetrying } from "./goal/blocked-state";
-import { bridgeProgressEvidence } from "./goal/evidence-bridge";
-import { getDefinition } from "./subagents/registry";
-import { loadMcpToolDefinitions } from "./mcp/loader";
+import { mirrorAgentEventToRuntimeLedger } from "./runtime/agent-event-mirror";
 import {
-  listMcpTools as listMcpToolsRuntime,
-  callMcpTool as callMcpToolRuntime,
-} from "./mcp/runtime";
-import { listEnabledMcpServers } from "./mcp/registry";
-import { updateProgress } from "./progress/server-store";
-import { writePersistedProgress } from "./progress/file-store";
-import { appendEvidenceMany } from "./evidence/server-store";
-import { appendRuntimeEvent } from "./runtime/event-store";
-import { bridgeAgentEventToRuntime } from "./runtime/agent-event-bridge";
+  appendAgentEventBufferEntry,
+  createAgentEventBuffer,
+  getAgentEventsSince as readBufferedAgentEventsSince,
+  getLatestAgentEventSeq,
+  notifyAgentEventListeners,
+  subscribeAgentEvent,
+  type AgentEventBufferEntry,
+} from "./agent-event-buffer";
+import {
+  createAssistantMessageTracker,
+  trackAssistantMessageEvent,
+  type AssistantMessageStreamEvent,
+  type AssistantMessageTracker,
+} from "./assistant-message-tracker";
+import { auditAndStoreGoalFinalMessage } from "./goal/final-message-audit";
+import {
+  customToolsForSession,
+  enableDefaultBrowserTools,
+} from "./agent-tool-assembly";
+import {
+  buildAgentExtensionWiring,
+  type AgentExtensionExternalEvent,
+} from "./agent-extension-wiring";
+import {
+  LOCAL_CODING_ASSISTANT_CLI,
+  LOCAL_CODING_ASSISTANT_MODEL_ID,
+  LOCAL_CODING_ASSISTANT_PROVIDER_ID,
+  LOCAL_CODING_ASSISTANT_RUNTIME_PROFILE,
+  SDK_AGENT_RUNTIME_PROFILE,
+  buildLocalCodingAssistantCliArgs,
+  createLocalCodingAssistantSession,
+  extractLocalCodingAssistantText,
+  isLocalCodingAssistantModelId,
+  localCodingAssistantMessage,
+} from "./local-coding-assistant/adapter";
+import {
+  buildAgentExtensionFactories,
+  createAgentResourceLoader,
+  createAgentSessionManager,
+} from "./agent-session-construction";
+import {
+  clearFinishWatchdog,
+  handleAgentSessionLifecycleEvent,
+  type AgentLifecycleDeps,
+} from "./agent-lifecycle";
 import {
   DEFAULT_CLIENT_REQUEST_TTL_MS,
   claimRecentClientRequest,
 } from "./client-request-dedupe";
+import type { SubagentRole } from "./subagents/types";
+import type { AgentGoal } from "./goal/types";
+import type { AgentProgress } from "./progress/types";
 import type {
-  ApprovalRequestEvent,
-  ApprovalResolvedEvent,
-} from "./collab/types";
-import type {
-  ClarificationRequestEvent,
-  ClarificationResolvedEvent,
-} from "./clarification/types";
-import type { BrowserStateEvent } from "./browser/types";
-import type { SubagentEvent, SubagentRole } from "./subagents/types";
-import type { WorkflowEvent } from "./workflows/types";
-import type { AgentGoal, GoalUpdatedEvent } from "./goal/types";
-import type {
-  AgentProgress,
-  ProgressUpdatedEvent,
-} from "./progress/types";
-import type { SessionRuntimePhase, SessionRuntimeState } from "./types";
+  AgentRuntimeProfile,
+  SessionRuntimePhase,
+  SessionRuntimeState,
+} from "./types";
 
-function workflowFetchUrlRuleId(rawUrl: string): string {
-  try {
-    const parsed = new URL(rawUrl);
-    const host = parsed.hostname.toLowerCase();
-    if (!host) return "workflow-fetch-url";
-    const port = parsed.port ? `:${parsed.port}` : "";
-    return `workflow-fetch-url:${parsed.protocol}//${host}${port}`;
-  } catch {
-    return "workflow-fetch-url";
-  }
-}
+export {
+  LOCAL_CODING_ASSISTANT_MODELS,
+  LOCAL_CODING_ASSISTANT_MODEL_ID,
+  LOCAL_CODING_ASSISTANT_PROVIDER_ID,
+} from "./local-coding-assistant/adapter";
 
 /**
  * Ring buffer 里允许的事件类型。
@@ -134,69 +123,7 @@ function workflowFetchUrlRuleId(rawUrl: string): string {
  */
 export type RingBufferEvent =
   | AgentSessionEvent
-  | ApprovalRequestEvent
-  | ApprovalResolvedEvent
-  | ClarificationRequestEvent
-  | ClarificationResolvedEvent
-  | BrowserStateEvent
-  | SubagentEvent
-  | WorkflowEvent
-  | GoalUpdatedEvent
-  | ProgressUpdatedEvent;
-
-export const LOCAL_CODING_ASSISTANT_PROVIDER_ID = "local-coding-assistant";
-export const LOCAL_CODING_ASSISTANT_MODEL_ID = "local-coding-assistant";
-const SHAULA_CODING_SYSTEM_PROMPT_OVERRIDE = [
-  "Shaula identity and coding principles:",
-  "- You are Shaula, a pragmatic local coding agent in this desktop app.",
-  "- If the user asks who you are, answer that you are Shaula. Do not say you are Pi, pi-coding-agent, or a generic assistant.",
-  "- Think before coding: state important assumptions, surface ambiguity, and ask when missing information would cause meaningful rework.",
-  "- Keep changes simple and surgical: implement only what was requested, avoid speculative abstractions, and match the existing code style.",
-  "- Every changed line should trace to the user's request. Do not refactor unrelated code or clean up unrelated dead code.",
-  "- Work toward verifiable goals: define what should pass, then run the narrowest useful checks before calling the work done.",
-  "- Before meaningful coding, identify the active project surface and main artifact when the workspace has multiple candidate apps, pages, or generated versions.",
-  "- For product/UI/workbench/dashboard tasks, set the information architecture before local visual patching: first-screen purpose, key status/metrics, next action, and verification target.",
-  "- If the user rejects two iterations or says the result is still wrong, stop cosmetic patching and diagnose whether the main artifact, information architecture, or acceptance criteria are wrong.",
-].join("\n");
-const LOCAL_CODING_ASSISTANT_CLI = String.fromCharCode(
-  99,
-  111,
-  100,
-  101,
-  119,
-  105,
-  122,
-  45,
-  99,
-  99
-);
-export const LOCAL_CODING_ASSISTANT_MODELS = [
-  {
-    id: LOCAL_CODING_ASSISTANT_MODEL_ID,
-    name: "自研 Coding 助手 默认模型",
-    cliModel: undefined,
-  },
-  {
-    id: "opus",
-    name: "Claude Opus (自研助手)",
-    cliModel: "opus",
-  },
-  {
-    id: "sonnet",
-    name: "Claude Sonnet (自研助手)",
-    cliModel: "sonnet",
-  },
-  {
-    id: "claude-opus-4-8",
-    name: "Claude Opus 4.8 (自研助手)",
-    cliModel: "claude-opus-4-8",
-  },
-  {
-    id: "claude-sonnet-4-5",
-    name: "Claude Sonnet 4.5 (自研助手)",
-    cliModel: "claude-sonnet-4-5",
-  },
-] as const;
+  | AgentExtensionExternalEvent;
 
 export interface AgentRecord {
   id: string;
@@ -211,7 +138,7 @@ export interface AgentRecord {
    * - 读:遍历 [head - count, head),根据 seq 过滤
    * - count = min(nextSeq, MAX),buffer 满之前 count == nextSeq
    */
-  events: Array<{ seq: number; event: RingBufferEvent } | undefined>;
+  events: Array<AgentEventBufferEntry<RingBufferEvent> | undefined>;
   nextSeq: number;
   /** notify all SSE listeners */
   listeners: Set<() => void>;
@@ -230,31 +157,14 @@ export interface AgentRecord {
   pendingFinishMessage: unknown | null;
   /** 当前普通 run/goal 的用户可见执行契约。Goal 自身仍以 goal.contractId 为准。 */
   activeContractId?: string;
+  /** Tracks the actual assistant final chat bubble for post-completion audit. */
+  assistantMessageTracker?: AssistantMessageTracker;
   external?: {
     kind: "local-coding-assistant";
     child: ChildProcessWithoutNullStreams | null;
     emittedText: string;
   };
 }
-
-const MAX_EVENTS_PER_AGENT = 5000;
-const FINISH_WATCHDOG_MS = 1500;
-const DEFAULT_BROWSER_TOOL_NAMES = [
-  "browser_open",
-  "browser_screenshot",
-  "browser_click",
-  "browser_click_text",
-  "browser_fill",
-  "browser_type",
-  "browser_search",
-  "browser_wait",
-  "browser_wait_for",
-  "browser_extract",
-  "browser_verify",
-  "browser_annotations",
-  "browser_resolve_annotation",
-  "browser_close",
-];
 
 interface GlobalRegistry {
   agents: Map<string, AgentRecord>;
@@ -377,7 +287,7 @@ export function getPackageManager(cwd?: string): DefaultPackageManager {
 /**
  * 把一条「非 SDK 来源」的事件塞进 ring buffer 并通知 SSE listeners。
  *
- * 用途：collab 自定义事件（approval_request / approval_resolved）走相同 SSE 通道
+ * 用途：extension 自定义事件（approval / clarification / progress 等）走相同 SSE 通道
  * 推到前端，前端按 type 字段分发。
  *
  * 设计要点：
@@ -387,16 +297,7 @@ export function getPackageManager(cwd?: string): DefaultPackageManager {
  */
 export function pushExternalEvent(
   rec: AgentRecord,
-  event:
-    | ApprovalRequestEvent
-    | ApprovalResolvedEvent
-    | ClarificationRequestEvent
-    | ClarificationResolvedEvent
-    | BrowserStateEvent
-    | SubagentEvent
-    | WorkflowEvent
-    | GoalUpdatedEvent
-    | ProgressUpdatedEvent
+  event: AgentExtensionExternalEvent
 ): void {
   pushAgentEvent(rec, event);
 }
@@ -412,209 +313,54 @@ export function pushProgressEvent(
   pushExternalEvent(rec, { type: "progress_updated", progress });
 }
 
-function pauseGoalForUserInput(rec: AgentRecord, reason: string): void {
-  const goal = getGoal(rec.id);
-  if (!goal || goal.status !== "active") return;
-  const paused = setGoalStatus(rec.id, "paused", {
-    pauseReason: reason,
-  });
-  pushGoalEvent(rec, paused);
-}
-
-function buildGoalContinuationPrompt(goal: AgentGoal, recap?: string): string {
-  const closureLines = buildGoalClosurePromptFragment(goal.lastClosure);
-  return [
-    "Continue working toward the active goal:",
-    "",
-    goal.objective,
-    ...(closureLines.length > 0 ? ["", ...closureLines] : []),
-    ...(recap && recap.trim()
-      ? ["", "Context from previous turns (do not repeat finished work):", recap]
-      : []),
-    "",
-    goal.lastClosure?.verdict === "ready_to_finalize"
-      ? "Finalize now: summarize the completed work, cite the evidence, and call goal_update with status=complete."
-      : "Do the next useful step from the harness closure. If the full goal is achieved, call goal_update with status=complete.",
-    "Keep the user-visible progress current with update_progress when steps start, finish, block, or produce evidence artifacts.",
-    "If you are truly blocked and cannot make meaningful progress without user input or an external change, call goal_update with status=blocked and include a short blockedReason.",
-    "Otherwise continue implementation, verification, or investigation. Keep the user informed with concise progress.",
-  ].join("\n");
-}
-
-function maybeContinueGoal(rec: AgentRecord): void {
-  const goal = getGoal(rec.id);
-  if (!goal || goal.status !== "active") return;
-
-  const closure = goal.lastClosure;
-  if (closure?.verdict === "needs_user") {
-    const paused = setGoalStatus(rec.id, "paused", {
-      pauseReason: `Harness needs user input: ${
-        closure.userQuestion ?? closure.reason
-      }`,
-    });
-    pushGoalEvent(rec, paused);
-    return;
-  }
-  if (closure?.verdict === "blocked") {
-    const paused = setGoalStatus(rec.id, "paused", {
-      pauseReason: `Harness blocked: ${closure.nextAction || closure.reason}`,
-    });
-    pushGoalEvent(rec, paused);
-    return;
-  }
-  if (
-    closure?.verdict === "ready_to_finalize" &&
-    closure.finalizationPromptedAt
-  ) {
-    const paused = setGoalStatus(rec.id, "paused", {
-      pauseReason:
-        "Harness already requested finalization; waiting for explicit goal completion.",
-    });
-    pushGoalEvent(rec, paused);
-    return;
-  }
-
-  // Dead-loop guard: if the goal keeps hitting the same blocker, stop
-  // auto-retrying and surface the concrete unblock action to the user instead of
-  // burning tokens on a wall we cannot pass.
-  if (shouldStopRetrying(goal.blockedState)) {
-    const state = goal.blockedState!;
-    const paused = setGoalStatus(rec.id, "paused", {
-      pauseReason: `Stuck on a repeated blocker (${state.repeatedCount}x): ${state.unblockAction}`,
-    });
-    pushGoalEvent(rec, paused);
-    return;
-  }
-
-  if (
-    listPendingApprovals(rec.id).length > 0 ||
-    listPendingClarifications(rec.id).length > 0
-  ) {
-    const paused = setGoalStatus(rec.id, "paused", {
-      pauseReason: "Waiting for user input.",
-    });
-    pushGoalEvent(rec, paused);
-    return;
-  }
-
-  const now = Date.now();
-  if (goal.lastRunAt && now - goal.lastRunAt < 1200) return;
-  let next = noteGoalContinuation(rec.id);
-  if (!next || next.status !== "active") return;
-  if (
-    next.lastClosure?.verdict === "ready_to_finalize" &&
-    !next.lastClosure.finalizationPromptedAt
-  ) {
-    next =
-      patchGoal(rec.id, {
-        lastClosure: {
-          ...next.lastClosure,
-          finalizationPromptedAt: now,
-        },
-      }) ?? next;
-  }
-  pushGoalEvent(rec, next);
-
-  setTimeout(() => {
-    const latest = getGoal(rec.id);
-    if (!latest || latest.status !== "active" || rec.isStreaming) return;
-    const recap = buildGoalRecap(rec.id);
-    void rec.session.prompt(buildGoalContinuationPrompt(latest, recap)).catch((e) => {
-      const paused = setGoalStatus(rec.id, "paused", {
-        pauseReason: e instanceof Error ? e.message : "Goal continuation failed.",
-      });
-      pushGoalEvent(rec, paused);
-    });
-  }, 200);
+function lifecycleDepsFor(rec: AgentRecord): AgentLifecycleDeps {
+  return {
+    getGoal,
+    setGoalStatus,
+    pushGoal: (goal) => pushGoalEvent(rec, goal),
+    listPendingApprovals,
+    listPendingClarifications,
+    noteGoalContinuation,
+    patchGoal,
+    buildGoalRecap,
+    startGoalTurn,
+    finishGoalTurn,
+    evaluateAndStoreGoalRunClosure,
+  };
 }
 
 function pushAgentEvent(rec: AgentRecord, event: RingBufferEvent): void {
-  const seq = rec.nextSeq++;
+  rec.assistantMessageTracker ??= createAssistantMessageTracker();
+  const actualFinalMessage = trackAssistantMessageEvent(
+    rec.assistantMessageTracker,
+    event as AssistantMessageStreamEvent
+  );
+  const seq = appendAgentEventBufferEntry(rec, event);
   rec.updatedAt = Date.now();
-  rec.events[seq % MAX_EVENTS_PER_AGENT] = { seq, event };
-  mirrorRuntimeEvent(rec, seq, event);
-  for (const l of rec.listeners) l();
+  mirrorAgentEventToRuntimeLedger(
+    {
+      agentId: rec.id,
+      sessionId: rec.session.sessionId,
+      sessionPath: rec.session.sessionFile ?? null,
+      cwd: rec.cwd,
+      seq,
+    },
+    event
+  );
+  notifyAgentEventListeners(rec);
+  if (actualFinalMessage) auditFinalAssistantMessageIfNeeded(rec, actualFinalMessage);
 }
 
-function mirrorRuntimeEvent(
+function auditFinalAssistantMessageIfNeeded(
   rec: AgentRecord,
-  seq: number,
-  event: RingBufferEvent
+  actualFinalMessage: NonNullable<
+    ReturnType<typeof trackAssistantMessageEvent>
+  >
 ): void {
-  try {
-    const bridged = bridgeAgentEventToRuntime(
-      {
-        agentId: rec.id,
-        sessionId: rec.session.sessionId,
-        sessionPath: rec.session.sessionFile ?? null,
-        cwd: rec.cwd,
-        seq,
-      },
-      event
-    );
-    if (!bridged) return;
-    const evidence = appendEvidenceMany(bridged.evidence);
-    appendRuntimeEvent(
-      evidence.length > 0 ? { ...bridged.event, evidence } : bridged.event
-    );
-  } catch (err) {
-    console.error("[runtime-event-bridge] mirror failed:", err);
-  }
-}
-
-function messageHasStopReason(event: unknown): event is { message: unknown } {
-  if (!event || typeof event !== "object") return false;
-  const e = event as {
-    message?: { role?: string; stopReason?: unknown };
-    assistantMessageEvent?: { partial?: { role?: string; stopReason?: unknown } };
-  };
-  const msg = e.message ?? e.assistantMessageEvent?.partial;
-  return msg?.role === "assistant" && typeof msg.stopReason === "string";
-}
-
-function clearFinishWatchdog(rec: AgentRecord) {
-  if (rec.finishWatchdog) {
-    clearTimeout(rec.finishWatchdog);
-    rec.finishWatchdog = null;
-  }
-  rec.pendingFinishMessage = null;
-}
-
-function finishStreamingRun(rec: AgentRecord): void {
-  if (!rec.isStreaming) return;
-  rec.isStreaming = false;
-  // Close the open goal turn before deciding whether to auto-continue. The
-  // goal's terminal status (complete/blocked) maps onto the turn status.
-  const goal = getGoal(rec.id);
-  if (goal) {
-    const turnStatus =
-      goal.status === "complete"
-        ? "completed"
-        : goal.status === "blocked"
-          ? "blocked"
-          : "completed";
-    finishGoalTurn(rec.id, {
-      status: turnStatus,
-      ...(goal.status === "blocked" && goal.blockedReason
-        ? { blockedReason: goal.blockedReason }
-        : {}),
-    });
-    const storedClosure = evaluateAndStoreGoalRunClosure(rec.id);
-    if (storedClosure) {
-      pushGoalEvent(rec, storedClosure.goal);
-    }
-  }
-  maybeContinueGoal(rec);
-}
-
-function scheduleFinishWatchdog(rec: AgentRecord, message: unknown): void {
-  clearFinishWatchdog(rec);
-  rec.pendingFinishMessage = message;
-  rec.finishWatchdog = setTimeout(() => {
-    rec.finishWatchdog = null;
-    rec.pendingFinishMessage = null;
-    finishStreamingRun(rec);
-  }, FINISH_WATCHDOG_MS);
+  const result = auditAndStoreGoalFinalMessage(rec.id, actualFinalMessage, {
+    sessionId: rec.session.sessionId,
+  });
+  if (result?.goal) pushGoalEvent(rec, result.goal);
 }
 
 export interface CreateOptions {
@@ -653,103 +399,7 @@ export interface CreateOptions {
 }
 
 export function islocalCodingAssistantModelId(modelId: string): boolean {
-  return LOCAL_CODING_ASSISTANT_MODELS.some((model) => model.id === modelId);
-}
-
-function localCodingAssistantModel(modelId = LOCAL_CODING_ASSISTANT_MODEL_ID) {
-  const option =
-    LOCAL_CODING_ASSISTANT_MODELS.find((model) => model.id === modelId) ??
-    LOCAL_CODING_ASSISTANT_MODELS[0];
-  return {
-    provider: LOCAL_CODING_ASSISTANT_PROVIDER_ID,
-    id: option.id,
-    name: option.name,
-    api: "local-cli",
-    baseUrl: "local-cli",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
-    maxTokens: 64000,
-  };
-}
-
-function localCodingAssistantCliModelArg(modelId: string): string | undefined {
-  return LOCAL_CODING_ASSISTANT_MODELS.find((model) => model.id === modelId)?.cliModel;
-}
-
-function createLocalCodingAssistantSession(sessionId: string, modelId: string) {
-  const session = {
-    sessionId,
-    sessionFile: undefined,
-    model: localCodingAssistantModel(modelId),
-    thinkingLevel: "medium",
-    pendingMessageCount: 0,
-    systemPrompt: SHAULA_CODING_SYSTEM_PROMPT_OVERRIDE,
-    prompt: async () => undefined,
-    followUp: async () => undefined,
-    steer: async () => undefined,
-    abort: async () => undefined,
-    abortCompaction: () => undefined,
-    compact: async () => undefined,
-    dispose: () => undefined,
-    subscribe: () => () => undefined,
-    supportsThinking: () => false,
-    getAvailableThinkingLevels: () => [],
-    getAllTools: () => [],
-    getActiveToolNames: () => [],
-    setActiveToolsByName: () => undefined,
-    setModel: (nextModel: ReturnType<typeof localCodingAssistantModel>) => {
-      session.model = nextModel;
-    },
-    getSessionStats: () => ({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      cost: 0,
-    }),
-    getContextUsage: () => null,
-    getUserMessagesForForking: () => [],
-    sessionManager: {
-      getTree: () => [],
-      getLeafId: () => null,
-    },
-  };
-  return session as unknown as AgentSession;
-}
-
-function buildLocalCodingAssistantPrompt(userPrompt: string): string {
-  return [
-    SHAULA_CODING_SYSTEM_PROMPT_OVERRIDE,
-    "",
-    "User task:",
-    userPrompt,
-  ].join("\n");
-}
-
-function localCodingAssistantMessage(
-  role: "user" | "assistant",
-  text: string,
-  responseId?: string,
-  modelId = LOCAL_CODING_ASSISTANT_MODEL_ID
-) {
-  return {
-    role,
-    responseId,
-    provider: LOCAL_CODING_ASSISTANT_PROVIDER_ID,
-    model: modelId,
-    api: "local-cli",
-    timestamp: Date.now(),
-    content: text
-      ? [
-          {
-            type: "text",
-            text,
-          },
-        ]
-      : [],
-  };
+  return isLocalCodingAssistantModelId(modelId);
 }
 
 function emitLocalCodingAssistantText(rec: AgentRecord, responseId: string, text: string) {
@@ -766,31 +416,6 @@ function emitLocalCodingAssistantText(rec: AgentRecord, responseId: string, text
     },
     message: localCodingAssistantMessage("assistant", "", responseId, modelId),
   } as RingBufferEvent);
-}
-
-function extractLocalCodingAssistantText(obj: unknown): string {
-  if (!obj || typeof obj !== "object") return "";
-  const item = obj as {
-    type?: unknown;
-    delta?: unknown;
-    text?: unknown;
-    result?: unknown;
-    message?: { content?: Array<{ type?: string; text?: string }> };
-    content?: Array<{ type?: string; text?: string }>;
-  };
-  if (typeof item.delta === "string") return item.delta;
-  if (typeof item.text === "string") return item.text;
-  const blocks = item.message?.content ?? item.content;
-  if (Array.isArray(blocks)) {
-    return blocks
-      .filter((block) => block.type === "text" && typeof block.text === "string")
-      .map((block) => block.text)
-      .join("");
-  }
-  if (item.type === "result" && typeof item.result === "string") {
-    return item.result;
-  }
-  return "";
 }
 
 function emitLocalCodingAssistantJsonLine(
@@ -815,6 +440,13 @@ function emitLocalCodingAssistantJsonLine(
 
 export function isLocalCodingAssistantAgent(rec: AgentRecord): boolean {
   return rec.external?.kind === "local-coding-assistant";
+}
+
+export function describeAgentRuntime(rec: AgentRecord): AgentRuntimeProfile {
+  if (isLocalCodingAssistantAgent(rec)) {
+    return LOCAL_CODING_ASSISTANT_RUNTIME_PROFILE;
+  }
+  return SDK_AGENT_RUNTIME_PROFILE;
 }
 
 export async function promptLocalCodingAssistantAgent(
@@ -844,18 +476,7 @@ export async function promptLocalCodingAssistantAgent(
     message: localCodingAssistantMessage("assistant", "", responseId, modelId),
   } as RingBufferEvent);
 
-  const modelArg = localCodingAssistantCliModelArg(modelId);
-  const args = [
-    "-p",
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    "--include-partial-messages",
-    "--permission-mode",
-    "default",
-    ...(modelArg ? ["--model", modelArg] : []),
-    buildLocalCodingAssistantPrompt(text),
-  ];
+  const args = buildLocalCodingAssistantCliArgs(text, modelId);
   const child = spawn(LOCAL_CODING_ASSISTANT_CLI, args, {
     cwd: rec.cwd,
     env: {
@@ -942,9 +563,7 @@ async function createLocalCodingAssistantAgent(opts: CreateOptions): Promise<{
     parentAgentId: opts.parentAgentId,
     childRole: opts.childRole,
     hidden: opts.hidden,
-    events: new Array(MAX_EVENTS_PER_AGENT),
-    nextSeq: 0,
-    listeners: new Set(),
+    ...createAgentEventBuffer<RingBufferEvent>(),
     unsubscribe: () => {},
     isStreaming: false,
     isPromptStarting: false,
@@ -952,6 +571,7 @@ async function createLocalCodingAssistantAgent(opts: CreateOptions): Promise<{
     recentClientRequests: new Map(),
     finishWatchdog: null,
     pendingFinishMessage: null,
+    assistantMessageTracker: createAssistantMessageTracker(),
     external: {
       kind: "local-coding-assistant",
       child: null,
@@ -982,937 +602,47 @@ export async function createAgent(opts: CreateOptions): Promise<{
     );
   }
 
-  // 准备 SessionManager（要么 resume 已有文件，要么基于 cwd 新建）
-  let sessionManager: SessionManager;
-  if (opts.sessionPath) {
-    sessionManager = SessionManager.open(opts.sessionPath);
-  } else {
-    sessionManager = SessionManager.create(
-      opts.cwd,
-      undefined,
-      opts.parentSessionPath ? { parentSession: opts.parentSessionPath } : undefined
-    );
-  }
+  const sessionManager = createAgentSessionManager({
+    cwd: opts.cwd,
+    sessionPath: opts.sessionPath,
+    parentSessionPath: opts.parentSessionPath,
+  });
 
   // 提前生成 agentId —— B2 的 CollabExtension 需要 id 闭包来标记审批归属。
   // 这里提前到 createAgentSession 之前不影响 B1 行为（id 仍然唯一）。
   const id = randomUUID();
 
-  // record 在 createAgentSession 之后才能建（要拿 session 实例）。
-  // 但 CollabExtension 的 onApprovalNeeded 闭包需要访问 record 来 push 自定义事件——
-  // 用 mutable holder 解决前向引用：handler 触发时 holder.current 一定已被赋值
-  // （tool_call 发生时 createAgentSession 已完成，record 已建好）。
-  const recordHolder: { current: AgentRecord | null } = { current: null };
-
-  // 构造 ResourceLoader 并注入真 CollabExtension（Phase B3 接真通道）。
-  // - getRules: 内置 1 条 dangerous-bash-destructive；未来 Settings 可注入用户规则
-  // - getAgentId: 闭包到当前 id，approval id 用 `${agentId}:${toolCallId}` 复合 key
-  // - onApprovalNeeded:
-  //     1. push approval_request 进 ring buffer → SSE 通知前端弹气泡
-  //     2. registerPendingApproval await 用户决策（或 5min 超时按 defaultDecision）
-  //     3. push approval_resolved 进 ring buffer → SSE 通知前端更新气泡状态
-  //     4. return 给 CollabExtension，由它决定 allow/block tool
-  const collabExtension = createCollabExtension({
-    getRules: () => DEFAULT_RULES,
-    getAgentId: () => id,
-    // B4：让 extension 在命中 ask 规则前先查"本 session 不再问"集合，
-    // 命中即静默放行——比 onApprovalNeeded 后再返回 allow 更彻底（不弹气泡也不推事件）。
-    hasRemember: (ruleId: string) => hasSessionRemember(id, ruleId),
-    onApprovalNeeded: async (req) => {
-      const rec = recordHolder.current;
-      // 安全网：理论上 rec 一定有；若没有则降级 auto-allow（避免卡死 agent）。
-      if (!rec) {
-        console.error(
-          "[collab] onApprovalNeeded called but record not ready; defaulting allow",
-          req.id
-        );
-        return { decision: "allow" };
-      }
-      pushExternalEvent(rec, { type: "approval_request", request: req });
-      const resp = await registerPendingApproval(req);
-      // resolvedBy：本函数 await 时无法区分是 user 主动还是 timeout 触发了 resolver。
-      // 由 server-store 内 setTimeout 触发的 resolve 不带 denyReason → 我们近似认为
-      // 没 denyReason 且 decision === defaultDecision 时是超时；其余视为 user。
-      // （Phase C 可在 ApprovalResponse 加 source 字段消除歧义，B3 先够用。）
-      const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
-        resp.denyReason === undefined && resp.decision === req.defaultDecision
-          ? "timeout"
-          : "user";
-      pushExternalEvent(rec, {
-        type: "approval_resolved",
-        id: req.id,
-        toolCallId: req.toolCallId,
-        decision: resp.decision,
-        resolvedBy,
-        denyReason: resp.denyReason,
-      });
-      return resp;
-    },
+  const wiring = await buildAgentExtensionWiring({
+    id,
+    cwd: opts.cwd,
+    parentAgentId: opts.parentAgentId,
+    taskId: opts.taskId,
+    taskTitle: opts.taskTitle,
+    enableSubagents: opts.enableSubagents,
+    mcpServers: opts.mcpServers,
+    createAgent,
+    getAgent: (agentId) => getAgent(agentId),
+    disposeAgent,
+    pushExternalEvent: (rec, event) =>
+      pushExternalEvent(rec as AgentRecord, event),
+    pushGoalEvent: (rec, goal) => pushGoalEvent(rec as AgentRecord, goal),
+    pushProgressEvent: (rec, progress) =>
+      pushProgressEvent(rec as AgentRecord, progress),
+    lifecycleDepsFor: (rec) => lifecycleDepsFor(rec as AgentRecord),
   });
 
-  async function requestWorkflowCapabilityApproval(params: {
-    workflowId: string;
-    capability: string;
-    objective: string;
-    rationale: string;
-    manifest: unknown;
-  }) {
-    const rec = recordHolder.current;
-    if (!rec) {
-      console.error(
-        "[workflow] capability approval called but record not ready; defaulting deny",
-        params.workflowId,
-        params.capability
-      );
-      return {
-        decision: "deny" as const,
-        denyReason: "No UI approval channel was available.",
-      };
-    }
-    const toolCallId = `workflow-capability:${params.workflowId}:${params.capability}`;
-    const req = {
-      id: `${id}:${toolCallId}`,
-      agentId: id,
-      toolCallId,
-      toolName: `workflow:${params.capability}`,
-      input: {
-        workflowId: params.workflowId,
-        capability: params.capability,
-        objective: params.objective,
-        rationale: params.rationale,
-        manifest: params.manifest,
-      },
-      reason: "manual" as const,
-      ruleId: `workflow-capability:${params.capability}`,
-      defaultDecision: "deny" as const,
-      createdAt: Date.now(),
-    };
-    pushExternalEvent(rec, { type: "approval_request", request: req });
-    const resp = await registerPendingApproval(req);
-    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
-      resp.denyReason === undefined && resp.decision === req.defaultDecision
-        ? "timeout"
-        : "user";
-    const resolvedResp =
-      resolvedBy === "timeout" && resp.decision === "deny"
-        ? {
-            ...resp,
-            denyReason: `Workflow capability approval timed out: ${params.capability}`,
-          }
-        : resp;
-    pushExternalEvent(rec, {
-      type: "approval_resolved",
-      id: req.id,
-      toolCallId: req.toolCallId,
-      decision: resolvedResp.decision,
-      resolvedBy,
-      denyReason: resolvedResp.denyReason,
-    });
-    return resolvedResp;
-  }
-
-  async function requestWorkflowWorktreeMergeApproval(params: {
-    workflowId: string;
-    objective: string;
-    rationale: string;
-    manifest: unknown;
-    worktree: {
-      id: string;
-      path: string;
-      branchName: string;
-      baseRef: string;
-    };
-    diff: {
-      stat: string;
-      diff: string;
-      path: string;
-      branchName: string;
-      baseRef: string;
-    };
-  }) {
-    const rec = recordHolder.current;
-    if (!rec) {
-      console.error(
-        "[workflow] worktree merge approval called but record not ready; defaulting deny",
-        params.workflowId,
-        params.worktree.id
-      );
-      return {
-        decision: "deny" as const,
-        denyReason: "No UI approval channel was available.",
-      };
-    }
-    const toolCallId = `workflow-merge:${params.workflowId}:${params.worktree.id}`;
-    const req = {
-      id: `${id}:${toolCallId}`,
-      agentId: id,
-      toolCallId,
-      toolName: "workflow:merge_worktree",
-      input: {
-        workflowId: params.workflowId,
-        objective: params.objective,
-        rationale: params.rationale,
-        manifest: params.manifest,
-        worktree: params.worktree,
-        stat: params.diff.stat,
-        diffPreview: params.diff.diff.slice(0, 12000),
-        truncated: params.diff.diff.length > 12000,
-      },
-      reason: "manual" as const,
-      ruleId: "workflow-merge-worktree",
-      defaultDecision: "deny" as const,
-      createdAt: Date.now(),
-    };
-    pushExternalEvent(rec, { type: "approval_request", request: req });
-    const resp = await registerPendingApproval(req);
-    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
-      resp.denyReason === undefined && resp.decision === req.defaultDecision
-        ? "timeout"
-        : "user";
-    pushExternalEvent(rec, {
-      type: "approval_resolved",
-      id: req.id,
-      toolCallId: req.toolCallId,
-      decision: resp.decision,
-      resolvedBy,
-      denyReason: resp.denyReason,
-    });
-    return resp;
-  }
-
-  async function requestSubagentWorktreeMergeApproval(params: {
-    taskId: string;
-    title: string;
-    worktree: { id: string; path: string; branchName: string; baseRef: string };
-    diff: { stat: string; diff: string };
-  }) {
-    const rec = recordHolder.current;
-    if (!rec) {
-      return {
-        decision: "deny" as const,
-        denyReason: "No UI approval channel was available.",
-      };
-    }
-    const toolCallId = `subagent-merge:${params.taskId}:${params.worktree.id}`;
-    const req = {
-      id: `${id}:${toolCallId}`,
-      agentId: id,
-      toolCallId,
-      toolName: "subagent:merge_worktree",
-      input: {
-        taskId: params.taskId,
-        title: params.title,
-        worktree: params.worktree,
-        stat: params.diff.stat,
-        diffPreview: params.diff.diff.slice(0, 12000),
-        truncated: params.diff.diff.length > 12000,
-      },
-      reason: "manual" as const,
-      ruleId: "subagent-merge-worktree",
-      defaultDecision: "deny" as const,
-      createdAt: Date.now(),
-    };
-    pushExternalEvent(rec, { type: "approval_request", request: req });
-    const resp = await registerPendingApproval(req);
-    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
-      resp.denyReason === undefined && resp.decision === req.defaultDecision
-        ? "timeout"
-        : "user";
-    pushExternalEvent(rec, {
-      type: "approval_resolved",
-      id: req.id,
-      toolCallId: req.toolCallId,
-      decision: resp.decision,
-      resolvedBy,
-      denyReason: resp.denyReason,
-    });
-    return resp;
-  }
-
-  async function requestMcpToolApproval(params: {
-    serverId: string;
-    tool: string;
-    input: Record<string, unknown>;
-  }) {
-    const rec = recordHolder.current;
-    if (!rec) {
-      return {
-        decision: "deny" as const,
-        denyReason: "No UI approval channel was available.",
-      };
-    }
-    const ruleId = `mcp:${params.serverId}:${params.tool}`;
-    if (hasSessionRemember(id, ruleId)) {
-      return { decision: "allow" as const };
-    }
-    const toolCallId = `mcp:${params.serverId}:${params.tool}:${Date.now()}`;
-    const req = {
-      id: `${id}:${toolCallId}`,
-      agentId: id,
-      toolCallId,
-      toolName: `mcp:${params.serverId}/${params.tool}`,
-      input: {
-        serverId: params.serverId,
-        tool: params.tool,
-        argsPreview: JSON.stringify(params.input).slice(0, 800),
-      },
-      reason: "manual" as const,
-      ruleId,
-      defaultDecision: "deny" as const,
-      createdAt: Date.now(),
-    };
-    pushExternalEvent(rec, { type: "approval_request", request: req });
-    const resp = await registerPendingApproval(req);
-    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
-      resp.denyReason === undefined && resp.decision === req.defaultDecision
-        ? "timeout"
-        : "user";
-    pushExternalEvent(rec, {
-      type: "approval_resolved",
-      id: req.id,
-      toolCallId: req.toolCallId,
-      decision: resp.decision,
-      resolvedBy,
-      denyReason: resp.denyReason,
-    });
-    return resp;
-  }
-
-  async function requestBrowserSiteApproval(params: {
-    origin: string;
-    url: string;
-  }): Promise<boolean> {
-    const rec = recordHolder.current;
-    if (!rec) return false;
-    const ruleId = `browser-site:${params.origin}`;
-    if (hasSessionRemember(id, ruleId)) return true;
-    const toolCallId = `browser-site:${params.origin}:${Date.now()}`;
-    const req = {
-      id: `${id}:${toolCallId}`,
-      agentId: id,
-      toolCallId,
-      toolName: "browser:open_external_site",
-      input: {
-        origin: params.origin,
-        url: params.url.slice(0, 500),
-      },
-      reason: "manual" as const,
-      ruleId,
-      defaultDecision: "deny" as const,
-      createdAt: Date.now(),
-    };
-    pushExternalEvent(rec, { type: "approval_request", request: req });
-    const resp = await registerPendingApproval(req);
-    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
-      resp.denyReason === undefined && resp.decision === req.defaultDecision
-        ? "timeout"
-        : "user";
-    pushExternalEvent(rec, {
-      type: "approval_resolved",
-      id: req.id,
-      toolCallId: req.toolCallId,
-      decision: resp.decision,
-      resolvedBy,
-      denyReason: resp.denyReason,
-    });
-    return resp.decision === "allow";
-  }
-
-  async function requestBrowserActionApproval(params: {
-    action: string;
-    detail: string;
-    url: string | null;
-  }): Promise<boolean> {
-    const rec = recordHolder.current;
-    if (!rec) return false;
-    const toolCallId = `browser-action:${params.action}:${Date.now()}`;
-    const req = {
-      id: `${id}:${toolCallId}`,
-      agentId: id,
-      toolCallId,
-      toolName: `browser:sensitive_action`,
-      input: {
-        action: params.action,
-        detail: params.detail,
-        url: params.url ?? "(none)",
-      },
-      reason: "manual" as const,
-      ruleId: `browser-action:${params.action}`,
-      defaultDecision: "deny" as const,
-      createdAt: Date.now(),
-    };
-    pushExternalEvent(rec, { type: "approval_request", request: req });
-    const resp = await registerPendingApproval(req);
-    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
-      resp.denyReason === undefined && resp.decision === req.defaultDecision
-        ? "timeout"
-        : "user";
-    pushExternalEvent(rec, {
-      type: "approval_resolved",
-      id: req.id,
-      toolCallId: req.toolCallId,
-      decision: resp.decision,
-      resolvedBy,
-      denyReason: resp.denyReason,
-    });
-    return resp.decision === "allow";
-  }
-
-  async function requestWorkflowMcpToolApproval(params: {
-    workflowId: string;
-    objective: string;
-    rationale: string;
-    manifest: unknown;
-    input: { server: string; tool: string; input?: Record<string, unknown> };
-  }) {
-    const rec = recordHolder.current;
-    if (!rec) {
-      return {
-        decision: "deny" as const,
-        denyReason: "No UI approval channel was available.",
-      };
-    }
-    const ruleId = `mcp:${params.input.server}:${params.input.tool}`;
-    if (hasSessionRemember(id, ruleId)) {
-      return { decision: "allow" as const };
-    }
-    const toolCallId = `workflow-mcp:${params.workflowId}:${params.input.server}:${params.input.tool}:${Date.now()}`;
-    const req = {
-      id: `${id}:${toolCallId}`,
-      agentId: id,
-      toolCallId,
-      toolName: `workflow:mcp:${params.input.server}/${params.input.tool}`,
-      input: {
-        workflowId: params.workflowId,
-        objective: params.objective,
-        rationale: params.rationale,
-        manifest: params.manifest,
-        server: params.input.server,
-        tool: params.input.tool,
-        argsPreview: JSON.stringify(params.input.input ?? {}).slice(0, 800),
-      },
-      reason: "manual" as const,
-      ruleId,
-      defaultDecision: "deny" as const,
-      createdAt: Date.now(),
-    };
-    pushExternalEvent(rec, { type: "approval_request", request: req });
-    const resp = await registerPendingApproval(req);
-    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
-      resp.denyReason === undefined && resp.decision === req.defaultDecision
-        ? "timeout"
-        : "user";
-    pushExternalEvent(rec, {
-      type: "approval_resolved",
-      id: req.id,
-      toolCallId: req.toolCallId,
-      decision: resp.decision,
-      resolvedBy,
-      denyReason: resp.denyReason,
-    });
-    return resp;
-  }
-
-  async function requestWorkflowNetworkApproval(params: {
-    workflowId: string;
-    objective: string;
-    rationale: string;
-    manifest: unknown;
-    input: {
-      url: string;
-      method?: string;
-      headers?: Record<string, string>;
-      body?: string;
-      maxBytes?: number;
-    };
-  }) {
-    const rec = recordHolder.current;
-    if (!rec) {
-      console.error(
-        "[workflow] network approval called but record not ready; defaulting deny",
-        params.workflowId,
-        params.input.url
-      );
-      return {
-        decision: "deny" as const,
-        denyReason: "No UI approval channel was available.",
-      };
-    }
-    const safeUrl = params.input.url.slice(0, 500);
-    const ruleId = workflowFetchUrlRuleId(params.input.url);
-    if (hasSessionRemember(id, ruleId)) {
-      return { decision: "allow" as const };
-    }
-    const toolCallId = `workflow-fetch:${params.workflowId}:${Date.now()}`;
-    const req = {
-      id: `${id}:${toolCallId}`,
-      agentId: id,
-      toolCallId,
-      toolName: "workflow:fetch_url",
-      input: {
-        workflowId: params.workflowId,
-        objective: params.objective,
-        rationale: params.rationale,
-        manifest: params.manifest,
-        url: safeUrl,
-        method: params.input.method ?? "GET",
-        headerNames: Object.keys(params.input.headers ?? {}),
-        bodyPreview: params.input.body?.slice(0, 500),
-        bodyTruncated: Boolean(params.input.body && params.input.body.length > 500),
-        maxBytes: params.input.maxBytes,
-      },
-      reason: "manual" as const,
-      ruleId,
-      defaultDecision: "deny" as const,
-      createdAt: Date.now(),
-    };
-    pushExternalEvent(rec, { type: "approval_request", request: req });
-    const resp = await registerPendingApproval(req);
-    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
-      resp.denyReason === undefined && resp.decision === req.defaultDecision
-        ? "timeout"
-        : "user";
-    pushExternalEvent(rec, {
-      type: "approval_resolved",
-      id: req.id,
-      toolCallId: req.toolCallId,
-      decision: resp.decision,
-      resolvedBy,
-      denyReason: resp.denyReason,
-    });
-    return resp;
-  }
-
-  async function requestWorkflowUserClarification(params: {
-    workflowId: string;
-    input: {
-      title?: string;
-      question: string;
-      context?: string;
-      options: Array<{
-        id?: string;
-        label: string;
-        description?: string;
-        value?: string;
-      }>;
-      recommendedOptionId?: string;
-    };
-  }) {
-    const rec = recordHolder.current;
-    if (!rec) {
-      console.error(
-        "[workflow] askUser called but record not ready; returning empty response",
-        params.workflowId
-      );
-      return {
-        requestId: `workflow-ask-user:${params.workflowId}`,
-        customText: "No UI channel was available.",
-        answer: "No UI channel was available.",
-      };
-    }
-    const requestId = `workflow-ask-user:${params.workflowId}:${Date.now()}`;
-    const options = params.input.options.map((option, index) => ({
-      id: option.id || `option-${index + 1}`,
-      label: option.label.slice(0, 48),
-      description: option.description?.slice(0, 160),
-      value: (option.value?.trim() || option.label).slice(0, 500),
-    }));
-    const req = {
-      id: `${id}:${requestId}`,
-      agentId: id,
-      requestId,
-      title: params.input.title?.slice(0, 80) || "需要你确认下一步",
-      question: params.input.question.slice(0, 500),
-      context: params.input.context?.slice(0, 500),
-      options,
-      recommendedOptionId:
-        params.input.recommendedOptionId &&
-        options.some((option) => option.id === params.input.recommendedOptionId)
-          ? params.input.recommendedOptionId
-          : options[0]?.id,
-      createdAt: Date.now(),
-    };
-    pushExternalEvent(rec, { type: "clarification_request", request: req });
-    pauseGoalForUserInput(rec, `Waiting for user input: ${req.question}`);
-    const resp = await registerPendingClarification(req);
-    pushExternalEvent(rec, {
-      type: "clarification_resolved",
-      id: req.id,
-      requestId: req.requestId,
-      selectedOptionId: resp.selectedOptionId,
-      customText: resp.customText,
-      resolvedBy: "user",
-    });
-    const selected = resp.selectedOptionId
-      ? options.find((option) => option.id === resp.selectedOptionId)
-      : null;
-    const answer = resp.customText?.trim() || selected?.value || "";
-    return {
-      requestId,
-      selectedOptionId: resp.selectedOptionId,
-      customText: resp.customText,
-      answer,
-    };
-  }
-
-  const clarificationExtension = createClarificationExtension({
-    getAgentId: () => id,
-    onClarificationNeeded: async (req) => {
-      // Cowork: a child subagent has no visible SSE channel of its own
-      // (hidden:true). Surface its clarification on the PARENT's channel so the
-      // user actually sees and answers it, tagged with the originating task.
-      const parentRec = opts.parentAgentId
-        ? getAgent(opts.parentAgentId)
-        : undefined;
-      if (parentRec) {
-        // Re-key the request onto the parent: pending + resolve must live under
-        // the parent agent id so the parent's /clarification endpoint resolves it.
-        const parentReq = {
-          ...req,
-          id: `${parentRec.id}:child:${id}:${req.requestId}`,
-          agentId: parentRec.id,
-          originAgentId: id,
-          taskId: opts.taskId,
-          taskTitle: opts.taskTitle,
-        };
-        pushExternalEvent(parentRec, {
-          type: "clarification_request",
-          request: parentReq,
-        });
-        pauseGoalForUserInput(
-          parentRec,
-          `Waiting for user input: ${parentReq.question}`
-        );
-        const resp = await registerPendingClarification(parentReq);
-        pushExternalEvent(parentRec, {
-          type: "clarification_resolved",
-          id: parentReq.id,
-          requestId: parentReq.requestId,
-          selectedOptionId: resp.selectedOptionId,
-          customText: resp.customText,
-          resolvedBy: "user",
-        });
-        return resp;
-      }
-
-      const rec = recordHolder.current;
-      if (!rec) {
-        console.error(
-          "[clarification] ask_user called but record not ready; returning empty response",
-          req.id
-        );
-        return { customText: "No UI channel was available." };
-      }
-      pushExternalEvent(rec, {
-        type: "clarification_request",
-        request: req,
-      });
-      pauseGoalForUserInput(rec, `Waiting for user input: ${req.question}`);
-      const resp = await registerPendingClarification(req);
-      pushExternalEvent(rec, {
-        type: "clarification_resolved",
-        id: req.id,
-        requestId: req.requestId,
-        selectedOptionId: resp.selectedOptionId,
-        customText: resp.customText,
-        resolvedBy: "user",
-      });
-      return resp;
-    },
-  });
-  const goalExtension = createGoalExtension({
-    getAgentId: () => id,
-    getGoal,
-    onGoalUpdate: (_agentId, input) => {
-      // Route through the stop-time verifier. A rejected `complete` keeps the
-      // goal active and returns a rejection note for the model.
-      const result = applyGoalUpdate(id, input);
-      const rec = recordHolder.current;
-      if (rec && result.goal) pushGoalEvent(rec, result.goal);
-      return result;
-    },
-  });
-  const progressExtension = createProgressExtension({
-    getAgentId: () => id,
-    onProgressUpdate: async (_agentId, input) => {
-      const progress = updateProgress(id, input);
-      // Bridge progress artifacts into goal evidence (only when a goal is
-      // active). De-dupes by id, so repeated updates are safe.
-      bridgeProgressEvidence(id, progress);
-      const rec = recordHolder.current;
-      if (rec) {
-        try {
-          await writePersistedProgress(rec.session.sessionId, progress);
-        } catch {
-          // Best-effort runtime cache; do not fail the tool call if persistence
-          // is temporarily unavailable.
-        }
-        pushProgressEvent(rec, progress);
-      }
-      return progress;
-    },
-  });
-
-  const browserExtension = createBrowserExtension({
-    getAgentId: () => id,
-    onBrowserState: (snapshot) => {
-      const rec = recordHolder.current;
-      if (!rec) return;
-      pushExternalEvent(rec, { type: "browser_state", snapshot });
-    },
-    // 阶段 E：外部站点首次访问 / 敏感动作走现有审批通道。
-    // 子 agent（hidden、无可见 SSE 通道）不注入审批 → guardSite 默认拒绝外部站点，
-    // 与"子 agent 不能随意访问外部站点"的安全语义一致。
-    ...(opts.parentAgentId
-      ? {}
-      : {
-          requestSiteApproval: (input) => requestBrowserSiteApproval(input),
-          requestActionApproval: (input) =>
-            requestBrowserActionApproval(input),
-        }),
-  });
-  const clipboardExtension = createClipboardExtension();
-  const delegateSubagentsTool = createDelegateSubagentsTool({
-    onDelegate: async (input, signal) => {
-      const rec = recordHolder.current;
-      if (!rec) throw new Error("agent record not ready");
-      const model = rec.session.model;
-      if (!model) throw new Error("model not ready");
-      return runSubagentBatch(
-        {
-          parentAgentId: id,
-          parentSessionPath: rec.session.sessionFile,
-          provider: model.provider,
-          modelId: model.id,
-          cwd: opts.cwd,
-          thinkingLevel: rec.session.thinkingLevel,
-          createChild: createAgent,
-          getChild: getAgent,
-          disposeChild: disposeAgent,
-          pushParentEvent: (event) => pushExternalEvent(rec, event),
-          resolveDefinition: (sid) => getDefinition(opts.cwd, sid),
-          worktrees: createGitWorktreeManager(opts.cwd),
-          approveSubagentMerge: (params) =>
-            requestSubagentWorktreeMergeApproval({
-              taskId: params.taskId,
-              title: params.title,
-              worktree: params.worktree,
-              diff: params.diff,
-            }),
-        },
-        input,
-        signal
-      );
-    },
-  });
-  const dynamicWorkflowTool = createDynamicWorkflowTool({
-    onRunWorkflow: async (input, signal) => {
-      const rec = recordHolder.current;
-      if (!rec) throw new Error("agent record not ready");
-      const model = rec.session.model;
-      if (!model) throw new Error("model not ready");
-      return runDynamicWorkflow(
-        {
-          runSubagents: (subagentInput, subagentSignal) =>
-            runSubagentBatch(
-              {
-                parentAgentId: id,
-                parentSessionPath: rec.session.sessionFile,
-                provider: model.provider,
-                modelId: model.id,
-                cwd: opts.cwd,
-                thinkingLevel: rec.session.thinkingLevel,
-                createChild: createAgent,
-                getChild: getAgent,
-                disposeChild: disposeAgent,
-                pushParentEvent: (event) => pushExternalEvent(rec, event),
-                resolveDefinition: (sid) => getDefinition(opts.cwd, sid),
-              },
-              subagentInput,
-              subagentSignal
-            ),
-        },
-        input,
-        signal
-      );
-    },
-  });
-  const workflowScriptTool = createWorkflowScriptTool({
-    onRunWorkflow: async (input, signal) => {
-      const rec = recordHolder.current;
-      if (!rec) throw new Error("agent record not ready");
-      const model = rec.session.model;
-      if (!model) throw new Error("model not ready");
-      return runDynamicWorkflow(
-        {
-          runSubagents: (subagentInput, subagentSignal) =>
-            runSubagentBatch(
-              {
-                parentAgentId: id,
-                parentSessionPath: rec.session.sessionFile,
-                provider: model.provider,
-                modelId: model.id,
-                cwd: opts.cwd,
-                thinkingLevel: rec.session.thinkingLevel,
-                createChild: createAgent,
-                getChild: getAgent,
-                disposeChild: disposeAgent,
-                pushParentEvent: (event) => pushExternalEvent(rec, event),
-                resolveDefinition: (sid) => getDefinition(opts.cwd, sid),
-              },
-              subagentInput,
-              subagentSignal
-            ),
-        },
-        input,
-        signal
-      );
-    },
-    onRunWorkflowScript: async (input, signal) => {
-      const rec = recordHolder.current;
-      if (!rec) throw new Error("agent record not ready");
-      const model = rec.session.model;
-      if (!model) throw new Error("model not ready");
-      return runWorkflowScript(
-        {
-          parentAgentId: id,
-          onEvent: (event) => pushExternalEvent(rec, event),
-          approveCapability: (request) =>
-            requestWorkflowCapabilityApproval(request),
-          approveWorktreeMerge: (request) =>
-            requestWorkflowWorktreeMergeApproval(request),
-          approveNetworkRequest: (request) =>
-            requestWorkflowNetworkApproval(request),
-          approveMcpTool: (request) =>
-            requestWorkflowMcpToolApproval(request),
-          askUser: (request) => requestWorkflowUserClarification(request),
-          worktrees: createGitWorktreeManager(opts.cwd),
-          networkPolicy: getWorkflowNetworkPolicy(),
-          // MCP for workflow scripts (workflow.listTools / callTool). The
-          // workflow tool belongs to the main agent, so it may use all enabled
-          // servers; the worker still goes through per-call approval above.
-          allowedMcpServers: undefined,
-          listMcpTools: async (serverId) => {
-            const ids = serverId
-              ? [serverId]
-              : listEnabledMcpServers().map((s) => s.id);
-            const out: Array<{
-              serverId: string;
-              name: string;
-              description?: string;
-              inputSchema?: Record<string, unknown>;
-            }> = [];
-            for (const sid of ids) {
-              try {
-                const tools = await listMcpToolsRuntime(sid);
-                for (const t of tools) {
-                  out.push({
-                    serverId: t.serverId,
-                    name: t.name,
-                    description: t.description,
-                    inputSchema: t.inputSchema,
-                  });
-                }
-              } catch {
-                // skip a broken server (best-effort, never throw into worker)
-              }
-            }
-            return out;
-          },
-          callMcpTool: async (callInput) => {
-            const result = await callMcpToolRuntime(
-              callInput.server,
-              callInput.tool,
-              callInput.input ?? {}
-            );
-            return {
-              server: callInput.server,
-              tool: callInput.tool,
-              text: result.text,
-              isError: result.isError,
-            };
-          },
-          runSubagents: (subagentInput, subagentSignal) =>
-            runSubagentBatch(
-              {
-                parentAgentId: id,
-                parentSessionPath: rec.session.sessionFile,
-                provider: model.provider,
-                modelId: model.id,
-                cwd: opts.cwd,
-                thinkingLevel: rec.session.thinkingLevel,
-                createChild: createAgent,
-                getChild: getAgent,
-                disposeChild: disposeAgent,
-                pushParentEvent: (event) => pushExternalEvent(rec, event),
-                resolveDefinition: (sid) => getDefinition(opts.cwd, sid),
-              },
-              subagentInput,
-              subagentSignal
-            ),
-        },
-        input,
-        signal
-      );
-    },
-  });
-
-  const resourceLoader = new DefaultResourceLoader({
+  const resourceLoader = createAgentResourceLoader({
     cwd: opts.cwd,
     agentDir: getAgentDir(),
     settingsManager: getSettingsManager(opts.cwd),
-    appendSystemPromptOverride: (base) => [
-      ...base,
-      SHAULA_CODING_SYSTEM_PROMPT_OVERRIDE,
-      [
-        "Response depth guideline:",
-        "Be concise, but do not be terse. When a task involves analysis, tool results, implementation details, or user-facing decisions, provide enough substance for the user to understand the result without asking a follow-up. Prefer a short complete answer over a one-line answer.",
-      ].join("\n"),
-    ],
-    extensionFactories: [
-      ...(opts.parentAgentId
-        ? [
-            createSubagentWriteBoundaryExtension({
-              cwd: opts.cwd,
-              writePaths: opts.writePaths,
-            }),
-          ]
-        : []),
-      createShaulaShellExtension({ cwd: opts.cwd }),
-      collabExtension,
-      clarificationExtension,
-      goalExtension,
-      progressExtension,
-      browserExtension,
-      clipboardExtension,
-    ],
+    extensionFactories: buildAgentExtensionFactories({
+      cwd: opts.cwd,
+      parentAgentId: opts.parentAgentId,
+      writePaths: opts.writePaths,
+      extensionFactories: wiring.extensionFactories,
+    }),
   });
   await resourceLoader.reload();
-
-  // Load MCP tools (Sprint 5). Best-effort: failures never block agent creation.
-  // Main agent (mcpServers undefined) sees all enabled servers; child subagents
-  // are scoped to their declared servers (or none).
-  let mcpTools: ToolDefinition[] = [];
-  try {
-    mcpTools = await loadMcpToolDefinitions({
-      allowedMcpServers: opts.mcpServers,
-      rules: [],
-      requestApproval: (params) => requestMcpToolApproval(params),
-      onAudit: () => {},
-    });
-  } catch {
-    mcpTools = [];
-  }
-
-  const baseCustomTools: ToolDefinition[] =
-    opts.enableSubagents === false
-      ? []
-      : [
-          delegateSubagentsTool as unknown as ToolDefinition,
-          dynamicWorkflowTool as unknown as ToolDefinition,
-          workflowScriptTool as unknown as ToolDefinition,
-        ];
-  const allCustomTools = [...baseCustomTools, ...mcpTools];
 
   const { session } = await createAgentSession({
     cwd: opts.cwd,
@@ -1924,20 +654,11 @@ export async function createAgent(opts: CreateOptions): Promise<{
     authStorage: getAuth(),
     modelRegistry: mr,
     resourceLoader,
-    customTools: allCustomTools.length > 0 ? allCustomTools : undefined,
+    customTools: customToolsForSession(wiring.customTools),
   });
 
   if (!opts.tools) {
-    const available = new Set(session.getAllTools().map((tool) => tool.name));
-    const active = new Set(session.getActiveToolNames());
-    let changed = false;
-    for (const name of DEFAULT_BROWSER_TOOL_NAMES) {
-      if (available.has(name) && !active.has(name)) {
-        active.add(name);
-        changed = true;
-      }
-    }
-    if (changed) session.setActiveToolsByName(Array.from(active));
+    enableDefaultBrowserTools(session);
   }
 
   const record: AgentRecord = {
@@ -1947,9 +668,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
     parentAgentId: opts.parentAgentId,
     childRole: opts.childRole,
     hidden: opts.hidden,
-    events: new Array(MAX_EVENTS_PER_AGENT),
-    nextSeq: 0,
-    listeners: new Set(),
+    ...createAgentEventBuffer<RingBufferEvent>(),
     unsubscribe: () => {},
     isStreaming: false,
     isPromptStarting: false,
@@ -1957,40 +676,14 @@ export async function createAgent(opts: CreateOptions): Promise<{
     recentClientRequests: new Map(),
     finishWatchdog: null,
     pendingFinishMessage: null,
+    assistantMessageTracker: createAssistantMessageTracker(),
   };
-  // 让 CollabExtension 的闭包能 push 自定义事件（approval_request/resolved）
-  recordHolder.current = record;
+  // 让 extension/tool 回调能 push 自定义事件（approval/clarification/progress 等）。
+  wiring.recordHolder.current = record;
 
-  // 把 AgentSession 的事件流接到 ring buffer + 通知 listeners
+  // 把 AgentSession 的生命周期状态和事件流接到 ring buffer + 通知 listeners
   record.unsubscribe = session.subscribe((event) => {
-    // 维护"是否正在跑"flag —— sidebar 状态点直接读它
-    if (event.type === "agent_start") {
-      clearFinishWatchdog(record);
-      record.isStreaming = true;
-      record.isPromptStarting = false;
-      record.updatedAt = Date.now();
-      // Open a goal turn when this run is driving an active goal. Records turn
-      // history so a long goal's progress survives restart (M2).
-      const goal = getGoal(record.id);
-      if (goal && goal.status === "active") {
-        startGoalTurn(record.id);
-      }
-    } else if (event.type === "tool_execution_start") {
-      clearFinishWatchdog(record);
-    } else if (event.type === "message_end" && messageHasStopReason(event)) {
-      scheduleFinishWatchdog(record, event.message);
-    } else if (event.type === "agent_end") {
-      record.isPromptStarting = false;
-      clearFinishWatchdog(record);
-      finishStreamingRun(record);
-      record.updatedAt = Date.now();
-    } else if (messageHasStopReason(event)) {
-      // Do not synthesize completion from partial assistant messages. For
-      // OpenAI-compatible tool-call turns the SDK emits stopReason-bearing
-      // partials before tool execution; closing the turn here prevents custom
-      // tools from ever running. Providers that correctly send a final DONE
-      // event are handled by the normal message_end/agent_end path.
-    }
+    handleAgentSessionLifecycleEvent(record, event, lifecycleDepsFor(record));
     pushAgentEvent(record, event);
   });
 
@@ -2055,30 +748,19 @@ export function getEventsSince(
 ): Array<{ seq: number; event: RingBufferEvent }> {
   const rec = reg.agents.get(agentId);
   if (!rec) return [];
-  // ring buffer 物理顺序≠seq 顺序（环到头会从下标 0 重新覆盖）。
-  // 遍历整个 buffer，跳过 undefined 与 seq<=since 的项；最后按 seq 升序排。
-  // 一次回放最多 MAX_EVENTS_PER_AGENT 条，sort 成本可接受。
-  const out: Array<{ seq: number; event: RingBufferEvent }> = [];
-  for (const e of rec.events) {
-    if (e && e.seq > sinceSeq) out.push(e);
-  }
-  out.sort((a, b) => a.seq - b.seq);
-  return out;
+  return readBufferedAgentEventsSince(rec, sinceSeq);
 }
 
 export function getLatestEventSeq(agentId: string): number {
   const rec = reg.agents.get(agentId);
-  return rec ? rec.nextSeq - 1 : -1;
+  return rec ? getLatestAgentEventSeq(rec) : -1;
 }
 
 /** 注册一个事件监听器（用于 SSE 长连接），返回取消函数 */
 export function onNewEvent(agentId: string, cb: () => void): () => void {
   const rec = reg.agents.get(agentId);
   if (!rec) return () => {};
-  rec.listeners.add(cb);
-  return () => {
-    rec.listeners.delete(cb);
-  };
+  return subscribeAgentEvent(rec, cb);
 }
 
 export { getAgentDir };

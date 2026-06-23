@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { __setRuntimeLedgerRootForTest } from "@/lib/runtime/file-ledger";
 import {
   __resetEvidenceStoreForTest,
   appendEvidence,
@@ -7,8 +11,18 @@ import {
 } from "./server-store";
 
 describe("evidence server store", () => {
+  let tmpDir = "";
+
   beforeEach(() => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "shaula-evidence-test-"));
+    __setRuntimeLedgerRootForTest(tmpDir);
     __resetEvidenceStoreForTest();
+  });
+
+  afterEach(() => {
+    __resetEvidenceStoreForTest();
+    __setRuntimeLedgerRootForTest(null);
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it("appends and lists evidence by ownership ids", () => {
@@ -58,6 +72,34 @@ describe("evidence server store", () => {
     expect(getEvidence("same")).toMatchObject({
       title: "Second",
       textPreview: "updated",
+      updatedAt: 2,
+    });
+  });
+
+  it("rehydrates session evidence from the runtime ledger", () => {
+    appendEvidence({
+      id: "persisted",
+      kind: "log",
+      title: "First",
+      sessionId: "session-persist",
+      createdAt: 1,
+    });
+    appendEvidence({
+      id: "persisted",
+      kind: "log",
+      title: "Updated",
+      textPreview: "replayed",
+      sessionId: "session-persist",
+      createdAt: 1,
+      updatedAt: 2,
+    });
+
+    __resetEvidenceStoreForTest();
+
+    expect(listEvidence({ sessionId: "session-persist" })).toHaveLength(1);
+    expect(getEvidence("persisted")).toMatchObject({
+      title: "Updated",
+      textPreview: "replayed",
       updatedAt: 2,
     });
   });

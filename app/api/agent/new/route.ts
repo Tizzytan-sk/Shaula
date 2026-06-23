@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { createAgent, getAgent } from "@/lib/agent-registry";
+import {
+  createAgent,
+  describeAgentRuntime,
+  getAgent,
+} from "@/lib/agent-registry";
 import { assertRemoteAuth } from "@/lib/remote/auth";
 import type { ThinkingLevel } from "@/lib/types";
 
@@ -39,6 +43,7 @@ export async function POST(req: Request) {
       thinkingLevel: rec?.session.thinkingLevel,
       supportsThinking: rec?.session.supportsThinking(),
       availableThinkingLevels: rec?.session.getAvailableThinkingLevels(),
+      runtimeProfile: rec ? describeAgentRuntime(rec) : null,
       model: rec?.session.model
         ? {
             provider: rec.session.model.provider,

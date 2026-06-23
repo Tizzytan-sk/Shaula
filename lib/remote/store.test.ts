@@ -6,6 +6,7 @@ import {
   completePairing,
   createPairingPayload,
   getRemoteAccessSettings,
+  isLocalRequest,
   listRemoteDevices,
   revokeRemoteDevice,
   updateRemoteAccessSettings,
@@ -21,6 +22,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   delete process.env.SHAULA_SETTINGS_FILE;
+  delete process.env.SHAULA_LOCAL_SECRET;
   await rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -72,5 +74,29 @@ describe("remote access store", () => {
 
     const devices = await listRemoteDevices();
     expect(devices.find((d) => d.id === completed.device.id)?.revokedAt).toBeTypeOf("number");
+  });
+
+  it("recognizes local requests from url host unless a local secret is configured", () => {
+    expect(isLocalRequest(new Request("http://localhost/api/clipboard"))).toBe(
+      true
+    );
+    expect(isLocalRequest(new Request("http://127.0.0.1/api/clipboard"))).toBe(
+      true
+    );
+    expect(isLocalRequest(new Request("http://example.com/api/clipboard"))).toBe(
+      false
+    );
+
+    process.env.SHAULA_LOCAL_SECRET = "test-secret";
+    expect(isLocalRequest(new Request("http://localhost/api/clipboard"))).toBe(
+      false
+    );
+    expect(
+      isLocalRequest(
+        new Request("http://example.com/api/clipboard", {
+          headers: { "x-shaula-local-secret": "test-secret" },
+        })
+      )
+    ).toBe(true);
   });
 });

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import os from "node:os";
 import pkg from "@/package.json";
+import { assertApiAccess } from "@/lib/api-boundary";
 import { listAgentSummaries, getModelRegistry } from "@/lib/agent-registry";
 import { getRemoteAccessSettings, isLocalRequest } from "@/lib/remote/store";
 import { listRemoteCandidates } from "@/lib/remote/network";
@@ -14,6 +15,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   ensureLongTaskScheduler();
   const settings = await getRemoteAccessSettings();
   const tunnelTarget = tunnelTargetFromRequest(req, settings.port);

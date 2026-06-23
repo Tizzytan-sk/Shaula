@@ -274,10 +274,19 @@ export function isLocalRequest(req: Request): boolean {
     return true;
   }
   if (secret) return false;
-  const host = req.headers.get("host") ?? "";
+  let host = req.headers.get("host") ?? "";
+  if (!host) {
+    try {
+      host = new URL(req.url).host;
+    } catch {
+      host = "";
+    }
+  }
   return (
     host.startsWith("localhost:") ||
+    host === "localhost" ||
     host.startsWith("127.0.0.1:") ||
+    host === "127.0.0.1" ||
     host.startsWith("[::1]:")
   );
 }

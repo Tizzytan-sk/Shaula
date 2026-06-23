@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertApiAccess } from "@/lib/api-boundary";
 import {
   deleteWorkflowTemplate,
   getWorkflowTemplate,
@@ -10,6 +11,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const url = new URL(req.url);
   const id = url.searchParams.get("id") ?? url.searchParams.get("templateId");
   if (id) {
@@ -23,6 +26,8 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const body = await req.json().catch(() => ({}));
   try {
     const template = putWorkflowTemplate({
@@ -49,6 +54,8 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const url = new URL(req.url);
   const id = url.searchParams.get("id") ?? url.searchParams.get("templateId");
   if (!id) {

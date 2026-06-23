@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertApiAccess } from "@/lib/api-boundary";
 import {
   getWorkflowNetworkPolicy,
   listWorkflowNetworkAudits,
@@ -9,6 +10,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const url = new URL(req.url);
   const auditLimit = Number(url.searchParams.get("auditLimit") ?? 50);
   const outcome = url.searchParams.get("outcome");
@@ -28,6 +31,8 @@ export async function GET(req: Request) {
 }
 
 export async function PUT(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const body = await req.json().catch(() => ({}));
   const rawPolicy =
     body && typeof body === "object" && "policy" in body

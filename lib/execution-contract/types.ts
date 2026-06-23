@@ -23,6 +23,20 @@ export interface ExecutionStopPolicy {
   askUserWhenBlocked?: boolean;
 }
 
+export type ExecutionMainArtifactKind =
+  | "file"
+  | "directory"
+  | "url"
+  | "route"
+  | "other";
+
+export interface ExecutionMainArtifact {
+  kind: ExecutionMainArtifactKind;
+  label: string;
+  href?: string;
+  source: "explicit" | "attachment" | "scope" | "objective" | "inferred";
+}
+
 export interface ExecutionProfileSelection {
   source: "inferred" | "override";
   selectedProfile: string;
@@ -39,6 +53,7 @@ export interface ExecutionContract {
   nonGoals: string[];
   acceptanceCriteria: ExecutionAcceptanceCriterion[];
   requiredEvidence: string[];
+  mainArtifact?: ExecutionMainArtifact;
   rubricProfile: string;
   profileSelection?: ExecutionProfileSelection;
   allowedCapabilities: string[];
@@ -56,6 +71,7 @@ export type ExecutionContractSummary = Pick<
   | "nonGoals"
   | "acceptanceCriteria"
   | "requiredEvidence"
+  | "mainArtifact"
   | "rubricProfile"
   | "profileSelection"
   | "allowedCapabilities"
@@ -71,6 +87,7 @@ export function toEvaluatorContractSource(
     scope: contract.scope,
     nonGoals: contract.nonGoals,
     requiredEvidence: contract.requiredEvidence,
+    mainArtifact: contract.mainArtifact,
     rubricProfile: contract.rubricProfile,
     stopPolicy: contract.stopPolicy,
   };

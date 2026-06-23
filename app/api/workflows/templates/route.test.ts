@@ -6,6 +6,7 @@ import {
   __resetWorkflowTemplateStoreForTest,
   __setWorkflowTemplateStoreRootForTest,
 } from "@/lib/workflows/template-store";
+import { TEAM_READONLY_REVIEW_TEMPLATE_ID } from "@/lib/workflows/builtin-templates";
 import { DELETE, GET, POST } from "./route";
 
 function request(url: string, init?: RequestInit) {
@@ -51,7 +52,10 @@ describe("/api/workflows/templates", () => {
 
     const listed = await GET(request("http://localhost/api/workflows/templates"));
     await expect(listed.json()).resolves.toMatchObject({
-      templates: [expect.objectContaining({ id: "research" })],
+      templates: expect.arrayContaining([
+        expect.objectContaining({ id: "research" }),
+        expect.objectContaining({ id: TEAM_READONLY_REVIEW_TEMPLATE_ID }),
+      ]),
     });
 
     const fetched = await GET(
@@ -75,5 +79,26 @@ describe("/api/workflows/templates", () => {
       request("http://localhost/api/workflows/templates?id=research")
     );
     expect(missing.status).toBe(404);
+  });
+
+  it("serves the built-in read-only Team template without user-created files", async () => {
+    const listed = await GET(request("http://localhost/api/workflows/templates"));
+    await expect(listed.json()).resolves.toMatchObject({
+      templates: expect.arrayContaining([
+        expect.objectContaining({ id: TEAM_READONLY_REVIEW_TEMPLATE_ID }),
+      ]),
+    });
+
+    const fetched = await GET(
+      request(
+        `http://localhost/api/workflows/templates?id=${TEAM_READONLY_REVIEW_TEMPLATE_ID}`
+      )
+    );
+    await expect(fetched.json()).resolves.toMatchObject({
+      template: {
+        id: TEAM_READONLY_REVIEW_TEMPLATE_ID,
+        capabilities: ["spawn_agent", "read_files"],
+      },
+    });
   });
 });

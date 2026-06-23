@@ -12,6 +12,7 @@
 import { NextResponse } from "next/server";
 import path from "node:path";
 import fs from "node:fs/promises";
+import { assertApiAccess } from "@/lib/api-boundary";
 import { assertFileAccessAllowed } from "@/lib/file-access";
 
 export const runtime = "nodejs";
@@ -100,6 +101,8 @@ async function recursiveSearch(
 }
 
 export async function GET(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const url = new URL(req.url);
   const p = url.searchParams.get("path");
   const raw = url.searchParams.get("raw") === "1";
@@ -230,6 +233,8 @@ export async function GET(req: Request) {
 }
 
 export async function PUT(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const url = new URL(req.url);
   const p = url.searchParams.get("path");
   if (!p) return err("path required");
@@ -251,6 +256,8 @@ export async function PUT(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const url = new URL(req.url);
   const p = url.searchParams.get("path");
   if (!p) return err("path required");
@@ -269,6 +276,8 @@ export async function DELETE(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const url = new URL(req.url);
   const op = url.searchParams.get("op");
   if (op !== "move") return err("unknown op");

@@ -10,6 +10,10 @@ import {
   listWorkflowTemplates,
   putWorkflowTemplate,
 } from "./template-store";
+import {
+  TEAM_READONLY_REVIEW_TEMPLATE_ID,
+  TEAM_WORKTREE_IMPLEMENTATION_TEMPLATE_ID,
+} from "./builtin-templates";
 
 describe("workflow template store", () => {
   let root: string;
@@ -46,9 +50,11 @@ describe("workflow template store", () => {
       name: "Bug triage",
       defaultParams: { queue: "support" },
     });
-    expect(listWorkflowTemplates()).toEqual([
-      expect.objectContaining({ id: "triage", tags: ["triage"] }),
-    ]);
+    expect(listWorkflowTemplates()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "triage", tags: ["triage"] }),
+      ])
+    );
 
     const updated = putWorkflowTemplate({
       id: "triage",
@@ -65,6 +71,41 @@ describe("workflow template store", () => {
     });
     expect(deleteWorkflowTemplate("triage")).toBe(true);
     expect(getWorkflowTemplate("triage")).toBeUndefined();
+  });
+
+  it("exposes built-in workflow templates and lets user templates override them", () => {
+    expect(getWorkflowTemplate(TEAM_READONLY_REVIEW_TEMPLATE_ID)).toMatchObject({
+      id: TEAM_READONLY_REVIEW_TEMPLATE_ID,
+      capabilities: ["spawn_agent", "read_files"],
+      tags: expect.arrayContaining(["team", "readonly"]),
+    });
+    expect(getWorkflowTemplate(TEAM_WORKTREE_IMPLEMENTATION_TEMPLATE_ID)).toMatchObject({
+      id: TEAM_WORKTREE_IMPLEMENTATION_TEMPLATE_ID,
+      capabilities: ["spawn_agent", "read_files", "write_files", "worktree"],
+      tags: expect.arrayContaining(["team", "worktree"]),
+    });
+    expect(listWorkflowTemplates()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: TEAM_READONLY_REVIEW_TEMPLATE_ID }),
+      ])
+    );
+
+    putWorkflowTemplate({
+      id: TEAM_READONLY_REVIEW_TEMPLATE_ID,
+      name: "Custom read-only team review",
+      version: "9.9.9",
+      script: "return workflow.params;",
+    });
+
+    expect(getWorkflowTemplate(TEAM_READONLY_REVIEW_TEMPLATE_ID)).toMatchObject({
+      name: "Custom read-only team review",
+      version: "9.9.9",
+    });
+    expect(
+      listWorkflowTemplates().filter(
+        (template) => template.id === TEAM_READONLY_REVIEW_TEMPLATE_ID
+      )
+    ).toHaveLength(1);
   });
 
   it("rejects unsafe template ids", () => {
@@ -99,6 +140,6 @@ describe("workflow template store", () => {
       expect(template.id).toBeTruthy();
       expect(template.script).toContain("workflow.");
     }
-    expect(listWorkflowTemplates()).toHaveLength(files.length);
+    expect(listWorkflowTemplates().length).toBeGreaterThanOrEqual(files.length);
   });
 });

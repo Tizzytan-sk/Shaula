@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertApiAccess } from "@/lib/api-boundary";
 import {
   listMcpServers,
   removeMcpServer,
@@ -10,7 +11,9 @@ import type { McpServerConfig } from "@/lib/mcp/types";
 export const dynamic = "force-dynamic";
 
 /** GET: list configured MCP servers. */
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   return NextResponse.json({ servers: listMcpServers() });
 }
 
@@ -36,6 +39,8 @@ function parseServer(body: Record<string, unknown>): McpServerConfig | null {
 
 /** POST: upsert / remove / test a server. body.type selects the action. */
 export async function POST(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   let body: Record<string, unknown> = {};
   try {
     body = (await req.json()) as Record<string, unknown>;

@@ -10,6 +10,8 @@ import { NextResponse } from "next/server";
 import {
   LOCAL_CODING_ASSISTANT_MODELS,
   LOCAL_CODING_ASSISTANT_PROVIDER_ID,
+} from "@/lib/local-coding-assistant/adapter";
+import {
   getModelRegistry,
 } from "@/lib/agent-registry";
 import { detectLocalCodingAssistantStatus } from "@/lib/local-coding-assistant/status";

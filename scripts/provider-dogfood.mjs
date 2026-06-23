@@ -14,6 +14,18 @@ const SECRET_PATTERNS = [
   /\b(?:sk|sk-ant|sk-proj|key)-[A-Za-z0-9_-]{16,}\b/g,
 ];
 
+export const PROVIDER_DOGFOOD_ORCHESTRATION_TOOL_RULES = Object.freeze([
+  "delegate_subagents",
+  "plan_subagents",
+  "run_dynamic_workflow",
+  "run_workflow_",
+  "workflow_",
+  "subagent_",
+  "retry_subagent_",
+  "continue_subagent_",
+  "open_child_subagent",
+]);
+
 export const PROVIDER_DOGFOOD_CASES = [
   {
     id: "coding-diff-success",
@@ -56,6 +68,8 @@ export const PROVIDER_DOGFOOD_CASES = [
         `Use ${source} as the source_note href and analysis_artifact href.`,
         "Report the package name exactly.",
         "After source_note and analysis_artifact evidence exists, call goal_update with status=complete again.",
+        "The second goal_update must include a finalSummary that names the package exactly",
+        "and evidenceIds containing the returned source_note and analysis_artifact evidence ids.",
       ].join(" ");
     },
   },
@@ -91,11 +105,14 @@ export const PROVIDER_DOGFOOD_CASES = [
     runVerification: false,
     objective() {
       return [
-        "Provider dogfood blocked-state task.",
+        "Provider dogfood blocked-state protocol test.",
         "The task requires a credential named SHAULA_DOGFOOD_MISSING_TOKEN.",
         "Do not invent this credential and do not ask external services for it.",
-        "Record a concise blocker progress artifact, then call goal_update with status=blocked",
-        "and explain that the missing local credential is required to continue.",
+        "No file inspection, shell command, workflow, browser, or subagent call is needed.",
+        "Immediately record a concise blocker progress artifact titled \"Blocker log\"",
+        "that mentions SHAULA_DOGFOOD_MISSING_TOKEN.",
+        "Then immediately call goal_update with status=blocked and blockedReason",
+        "explaining that SHAULA_DOGFOOD_MISSING_TOKEN is required to continue.",
       ].join(" ");
     },
   },
@@ -250,10 +267,10 @@ export function renderMarkdownReport(report) {
       "",
       "Evidence:",
       "",
-      "| Kind | Title | Trust | Metadata |",
-      "| --- | --- | --- | --- |",
+      "| ID | Kind | Title | Trust | Preview | Metadata |",
+      "| --- | --- | --- | --- | --- | --- |",
       ...record.evidence.map((item) =>
-        `| ${markdownCell(item.kind)} | ${markdownCell(item.title)} | ${markdownCell(item.trustLevel ?? "")} | ${markdownCell(JSON.stringify(item.metadata ?? {}))} |`
+        `| ${markdownCell(item.id ?? "")} | ${markdownCell(item.kind)} | ${markdownCell(item.title)} | ${markdownCell(item.trustLevel ?? "")} | ${markdownCell(item.textPreview ?? "")} | ${markdownCell(JSON.stringify(item.metadata ?? {}))} |`
       ),
       "",
       "Notes:",
@@ -264,6 +281,135 @@ export function renderMarkdownReport(report) {
   }
 
   return redactSecrets(lines.join("\n"));
+}
+
+export function isProviderDogfoodReportSuccessful(report) {
+  return (report.records ?? []).every((record) =>
+    isProviderDogfoodRecordSuccessful(record)
+  );
+}
+
+function isProviderDogfoodRecordSuccessful(record) {
+  const final = record.final ?? {};
+  if (final.goalStatus === "error" || final.evaluationStatus === "error") {
+    return false;
+  }
+
+  switch (record.id) {
+    case "coding-diff-success":
+      return (
+        final.goalStatus === "complete" &&
+        final.evaluationStatus === "passed" &&
+        hasExpectedEvidence(record, "diff") &&
+        hasExpectedEvidence(record, "test_result")
+      );
+    case "verifier-rejection-recovery":
+      return (
+        final.goalStatus === "complete" &&
+        final.evaluationStatus === "passed" &&
+        (record.intermediateEvaluations?.rejectedCount ?? 0) > 0 &&
+        !hasRunnerCompletion(record) &&
+        hasExpectedEvidence(record, "source_note") &&
+        hasExpectedEvidence(record, "analysis_artifact")
+      );
+    case "needs-user-pause":
+      return final.goalStatus === "paused" || final.closureVerdict === "needs_user";
+    case "blocked-pause":
+      return final.goalStatus === "blocked" && hasExpectedEvidence(record, "blocker_log");
+    case "browser-observation":
+      return (
+        final.goalStatus === "complete" &&
+        final.evaluationStatus === "passed" &&
+        (record.evidence ?? []).some(
+          (item) =>
+            item.kind === "browser_snapshot" &&
+            item.trustLevel === "host_observed" &&
+            (item.metadata?.outcome === "passed" || item.metadata?.passed === true)
+        )
+      );
+    default:
+      return final.goalStatus === "complete" && final.evaluationStatus === "passed";
+  }
+}
+
+function hasRunnerCompletion(record) {
+  return (record.runnerActions ?? []).some((action) =>
+    String(action).startsWith("runner_goal_update_complete:accepted")
+  );
+}
+
+function hasExpectedEvidence(record, expected) {
+  const evidence = Array.isArray(record.evidence) ? record.evidence : [];
+  return evidence.some((item) => evidenceMatchesExpected(item, expected));
+}
+
+function evidenceMatchesExpected(item, expected) {
+  const id = String(item?.id ?? "").toLowerCase();
+  const kind = String(item?.kind ?? "").toLowerCase();
+  const title = String(item?.title ?? "").toLowerCase();
+  const trustLevel = String(item?.trustLevel ?? "").toLowerCase();
+  const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  const metadataKind = String(metadata.kind ?? "").toLowerCase();
+  const metadataStatus = String(metadata.status ?? metadata.outcome ?? "").toLowerCase();
+  const requiredEvidence = Array.isArray(metadata.evidenceRequired)
+    ? metadata.evidenceRequired.map((value) => String(value).toLowerCase())
+    : [];
+  const evidenceText = [
+    id,
+    kind,
+    title,
+    trustLevel,
+    String(item?.textPreview ?? ""),
+    JSON.stringify(metadata),
+  ].join(" ").toLowerCase();
+
+  switch (expected) {
+    case "diff":
+      return (
+        metadataKind === "diff" ||
+        requiredEvidence.includes("diff") ||
+        id.includes("diff") ||
+        title.includes("diff")
+      );
+    case "test_result":
+      return (
+        metadataKind === "test" ||
+        metadata.verificationKind === "test" ||
+        requiredEvidence.includes("test_result") ||
+        (kind === "verification_result" && metadataStatus === "passed") ||
+        id.includes("test") ||
+        title.includes("test")
+      );
+    case "source_note":
+      return (
+        requiredEvidence.includes("source_note") ||
+        id.includes("source-note") ||
+        id.includes("source_note") ||
+        title.includes("source")
+      );
+    case "analysis_artifact":
+      return (
+        requiredEvidence.includes("analysis_artifact") ||
+        id.includes("analysis-artifact") ||
+        id.includes("analysis_artifact") ||
+        title.includes("analysis")
+      );
+    case "blocker_log":
+      return (
+        kind === "progress_artifact" &&
+        metadataKind === "log" &&
+        title === "blocker log" &&
+        evidenceText.includes("shaula_dogfood_missing_token")
+      );
+    case "browser_observation":
+      return (
+        kind === "browser_snapshot" &&
+        trustLevel === "host_observed" &&
+        (metadata.outcome === "passed" || metadata.passed === true)
+      );
+    default:
+      return requiredEvidence.includes(expected);
+  }
 }
 
 export async function runProviderDogfood(options) {
@@ -280,6 +426,8 @@ export async function runProviderDogfood(options) {
     writeReportIfRequested(options, dryReport);
     return dryReport;
   }
+
+  await assertProviderDogfoodReady(options);
 
   const readiness = await postJson(
     options.baseUrl,
@@ -312,12 +460,67 @@ export async function runProviderDogfood(options) {
     } finally {
       writeReportIfRequested(options, report);
       if (!options.keepWorkspaces && prepared.cleanup) {
-        await prepared.cleanup();
+        try {
+          await prepared.cleanup();
+        } catch (error) {
+          console.warn(`Provider dogfood cleanup warning: ${describeError(error)}`);
+        }
       }
     }
   }
 
   return report;
+}
+
+async function assertProviderDogfoodReady(options) {
+  const providers = await getJson(
+    options.baseUrl,
+    "/api/providers",
+    { timeoutMs: Math.min(options.requestTimeoutMs, 30_000) }
+  );
+  if (!providers.ok) {
+    const detail = providers.status === 0
+      ? providers.data?.error ?? "request failed"
+      : `${providers.status} ${redactSecrets(JSON.stringify(providers.data))}`;
+    throw new Error(
+      `Provider dogfood preflight failed: cannot query /api/providers at ${options.baseUrl}. ${detail}`
+    );
+  }
+
+  const providerList = Array.isArray(providers.data?.providers)
+    ? providers.data.providers
+    : [];
+  const provider = providerList.find((item) => item?.provider === options.provider);
+  if (!provider) {
+    const available = providerList
+      .map((item) => item?.provider)
+      .filter(Boolean)
+      .join(", ");
+    throw new Error(
+      `Provider dogfood preflight failed: provider "${options.provider}" is not registered. Available providers: ${available || "none"}`
+    );
+  }
+
+  const models = Array.isArray(provider.models) ? provider.models : [];
+  if (options.model && !models.some((model) => model?.id === options.model)) {
+    const available = models
+      .map((model) => model?.id)
+      .filter(Boolean)
+      .join(", ");
+    throw new Error(
+      `Provider dogfood preflight failed: model "${options.model}" is not registered for provider "${options.provider}". Available models: ${available || "none"}`
+    );
+  }
+
+  if (!provider.hasAuth) {
+    const authHint = [
+      provider.authSource ? `source=${provider.authSource}` : "",
+      provider.authLabel ? `label=${provider.authLabel}` : "",
+    ].filter(Boolean).join(", ");
+    throw new Error(
+      `Provider dogfood preflight failed: provider "${options.provider}" is registered but has no configured auth${authHint ? ` (${authHint})` : ""}. Configure a provider credential in Shaula settings or via the provider environment variable, then rerun npm run dogfood:provider.`
+    );
+  }
 }
 
 async function runDogfoodCase(dogfoodCase, options, prepared) {
@@ -337,6 +540,7 @@ async function runDogfoodCase(dogfoodCase, options, prepared) {
     throw new Error(`agent/new failed: ${created.status} ${JSON.stringify(created.data)}`);
   }
   const agentId = created.data.id;
+  await applyDogfoodToolPolicy({ options, agentId, dogfoodCase, runnerActions });
   const objective = dogfoodCase.objective({
     workspacePath: (prepared.workspacePath ?? options.cwd).replace(/\\/g, "/"),
     rootCwd: options.cwd.replace(/\\/g, "/"),
@@ -362,7 +566,9 @@ async function runDogfoodCase(dogfoodCase, options, prepared) {
     throw new Error(`goal_set failed: ${goalSet.status} ${JSON.stringify(goalSet.data)}`);
   }
 
-  let timeline = await waitForCaseIdle(options, agentId);
+  let timeline = await waitForCaseIdle(options, agentId, {
+    returnOnIdle: dogfoodCase.runVerification === true,
+  });
   if (dogfoodCase.expectedEvidence.includes("browser_observation")) {
     const observation = await recordHostBrowserObservation({
       options,
@@ -385,38 +591,14 @@ async function runDogfoodCase(dogfoodCase, options, prepared) {
     );
     runnerActions.push(`goal_run_verification:${verification.ok ? "ok" : verification.status}`);
     timeline = await getJson(options.baseUrl, `/api/agent/${agentId}?action=goal_timeline`);
-    const status = timeline.data?.goal?.status;
-    const evaluationStatus = timeline.data?.goal?.lastEvaluation?.status;
-    if (status !== "complete" && evaluationStatus === "passed") {
-      const complete = await postJson(
-        options.baseUrl,
-        `/api/agent/${agentId}`,
-        {
-          type: "goal_update",
-          status: "complete",
-        },
-        { timeoutMs: Math.min(options.requestTimeoutMs, 30_000) }
-      );
-      runnerActions.push(`runner_goal_update_complete:${complete.data?.accepted === true ? "accepted" : "rejected"}`);
-      timeline = await getJson(options.baseUrl, `/api/agent/${agentId}?action=goal_timeline`);
-    }
   }
-  if (
-    runnerActions.includes("host_browser_observation:passed") &&
-    timeline.data?.goal?.status !== "complete"
-  ) {
-    const complete = await postJson(
-      options.baseUrl,
-      `/api/agent/${agentId}`,
-      {
-        type: "goal_update",
-        status: "complete",
-      },
-      { timeoutMs: Math.min(options.requestTimeoutMs, 30_000) }
-    );
-    runnerActions.push(`runner_goal_update_complete:${complete.data?.accepted === true ? "accepted" : "rejected"}`);
-    timeline = await getJson(options.baseUrl, `/api/agent/${agentId}?action=goal_timeline`);
-  }
+  timeline = await maybeSubmitStructuredCompletion({
+    dogfoodCase,
+    options,
+    agentId,
+    timeline,
+    runnerActions,
+  });
 
   const events = await getJson(options.baseUrl, `/api/agent/${agentId}?action=runtime_events`);
   return summarizeRecord({
@@ -432,7 +614,144 @@ async function runDogfoodCase(dogfoodCase, options, prepared) {
   });
 }
 
-async function waitForCaseIdle(options, agentId) {
+async function applyDogfoodToolPolicy({ options, agentId, dogfoodCase, runnerActions }) {
+  const tools = await getJson(options.baseUrl, `/api/agent/${agentId}?action=get_tools`, {
+    timeoutMs: Math.min(options.requestTimeoutMs, 30_000),
+  });
+  if (!tools.ok) {
+    throw new Error(`get_tools failed: ${tools.status} ${JSON.stringify(tools.data)}`);
+  }
+
+  const allToolNames = Array.isArray(tools.data?.tools)
+    ? tools.data.tools
+        .map((item) => (typeof item?.name === "string" ? item.name : ""))
+        .filter(Boolean)
+    : [];
+  const activeToolNames = Array.isArray(tools.data?.active)
+    ? tools.data.active.filter((item) => typeof item === "string")
+    : [];
+  const currentTools = Array.isArray(tools.data?.active) ? activeToolNames : allToolNames;
+  if (currentTools.length === 0) {
+    runnerActions.push("tool_policy:skipped_no_tools");
+    return;
+  }
+
+  const nextTools = currentTools.filter(
+    (name) => !isProviderDogfoodToolDisabled(name, dogfoodCase)
+  );
+  if (nextTools.length === currentTools.length) {
+    runnerActions.push("tool_policy:unchanged");
+    return;
+  }
+
+  const updated = await postJson(
+    options.baseUrl,
+    `/api/agent/${agentId}`,
+    {
+      type: "set_tools",
+      tools: nextTools,
+    },
+    { timeoutMs: Math.min(options.requestTimeoutMs, 30_000) }
+  );
+  if (!updated.ok) {
+    throw new Error(`set_tools failed: ${updated.status} ${JSON.stringify(updated.data)}`);
+  }
+  runnerActions.push(`tool_policy:disabled:${currentTools.length - nextTools.length}`);
+}
+
+export function providerDogfoodDisabledToolRules(dogfoodCase) {
+  const disabled = [
+    ...PROVIDER_DOGFOOD_ORCHESTRATION_TOOL_RULES,
+  ];
+  if (!dogfoodCase.expectedEvidence.includes("browser_observation")) {
+    disabled.push("browser_");
+  }
+  if (dogfoodCase.id === "blocked-pause") {
+    disabled.push(
+      "apply_patch",
+      "bash",
+      "edit",
+      "list_files",
+      "powershell",
+      "read_file",
+      "run_command",
+      "search_files",
+      "shell",
+      "write_file"
+    );
+  }
+  return disabled;
+}
+
+export function isProviderDogfoodToolDisabled(name, dogfoodCase) {
+  return providerDogfoodDisabledToolRules(dogfoodCase).some(
+    (rule) => name === rule || name.startsWith(rule)
+  );
+}
+
+async function maybeSubmitStructuredCompletion({
+  dogfoodCase,
+  options,
+  agentId,
+  timeline,
+  runnerActions,
+}) {
+  if (!shouldRunnerSubmitCompletion(dogfoodCase)) return timeline;
+  if (timeline.data?.goal?.status === "complete") return timeline;
+
+  const completion = buildRunnerCompletionClaim(dogfoodCase, timeline.data);
+  if (completion.evidenceIds.length === 0) {
+    runnerActions.push("runner_goal_update_complete:skipped_no_evidence");
+    return timeline;
+  }
+
+  const complete = await postJson(
+    options.baseUrl,
+    `/api/agent/${agentId}`,
+    {
+      type: "goal_update",
+      status: "complete",
+      finalSummary: completion.finalSummary,
+      evidenceIds: completion.evidenceIds,
+    },
+    { timeoutMs: Math.min(options.requestTimeoutMs, 30_000) }
+  );
+  runnerActions.push(
+    `runner_goal_update_complete:${complete.data?.accepted === true ? "accepted" : "rejected"}`
+  );
+  return getJson(options.baseUrl, `/api/agent/${agentId}?action=goal_timeline`);
+}
+
+function shouldRunnerSubmitCompletion(dogfoodCase) {
+  return !["needs-user-pause", "blocked-pause", "verifier-rejection-recovery"].includes(
+    dogfoodCase.id
+  );
+}
+
+function buildRunnerCompletionClaim(dogfoodCase, timeline) {
+  const evidence = Array.isArray(timeline?.ledgerEvidence)
+    ? timeline.ledgerEvidence
+    : [];
+  const evidenceIds = evidence
+    .map((item) => (typeof item?.id === "string" ? item.id : ""))
+    .filter(Boolean)
+    .slice(0, 50);
+  const evidenceTitles = evidence
+    .map((item) => `${item.kind ?? "evidence"}: ${item.title ?? item.id ?? "untitled"}`)
+    .slice(0, 12)
+    .join("; ");
+  return {
+    evidenceIds,
+    finalSummary: [
+      `Provider dogfood case ${dogfoodCase.id} is complete.`,
+      `Required evidence: ${dogfoodCase.requiredEvidence.join(", ") || "none"}.`,
+      evidenceTitles ? `Cited evidence: ${evidenceTitles}.` : "",
+    ].filter(Boolean).join(" "),
+  };
+}
+
+async function waitForCaseIdle(options, agentId, input = {}) {
+  const returnOnIdle = input.returnOnIdle !== false;
   const startedAt = Date.now();
   let latest = null;
   while (Date.now() - startedAt < options.timeoutMs) {
@@ -456,13 +775,14 @@ async function waitForCaseIdle(options, agentId) {
       meta.data?.isStreaming === false &&
       (goalStatus === "complete" ||
         goalStatus === "blocked" ||
+        goalStatus === "paused" ||
         closureVerdict === "ready_to_finalize" ||
         closureVerdict === "needs_user" ||
         closureVerdict === "blocked")
     ) {
       return latest;
     }
-    if (meta.data?.isStreaming === false && latest) return latest;
+    if (returnOnIdle && meta.data?.isStreaming === false && latest) return latest;
     await sleep(options.pollMs);
   }
   if (latest) return latest;
@@ -485,9 +805,11 @@ function summarizeRecord({
   const closure = timeline?.lastClosure ?? goal?.lastClosure ?? null;
   const intermediateEvaluations = summarizeIntermediateEvaluations(events?.events);
   const evidence = (timeline?.ledgerEvidence ?? []).map((item) => ({
+    id: item.id,
     kind: item.kind,
     title: redactSecrets(item.title ?? ""),
     trustLevel: item.trustLevel,
+    textPreview: redactSecrets(item.textPreview ?? ""),
     metadata: redactEvidenceMetadata(item.metadata),
   }));
   return {
@@ -701,9 +1023,23 @@ async function prepareWorkspace(dogfoodCase, generatedAt) {
   return {
     workspacePath,
     cleanup: async () => {
-      fs.rmSync(workspacePath, { recursive: true, force: true });
+      await removePathWithRetries(workspacePath);
     },
   };
+}
+
+async function removePathWithRetries(targetPath) {
+  let lastError;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      await sleep(150 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }
 
 async function recordHostBrowserObservation({ options, prepared, agentId }) {
@@ -871,6 +1207,10 @@ async function main() {
     console.log(`Wrote ${path.resolve(options.out)}`);
   } else {
     console.log(markdown);
+  }
+  if (!options.dryRun && !isProviderDogfoodReportSuccessful(report)) {
+    console.error("Provider dogfood failed: one or more cases did not reach the expected final state.");
+    process.exitCode = 1;
   }
 }
 

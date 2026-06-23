@@ -13,6 +13,7 @@
  */
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { matchRule } from "./matcher";
+import { DEFAULT_RULES } from "./rules";
 import type { ApprovalRequest, ApprovalResponse, ApprovalRule } from "./types";
 
 export interface CollabExtensionOptions {
@@ -53,7 +54,11 @@ export function createCollabExtension(
 
         // rule.on === "ask"：先查 session remember（B4）。
         // 命中 → 静默放行（前端 chat 流也不会出现气泡——因为不推 approval_request）。
-        if (opts.hasRemember && opts.hasRemember(rule.id)) {
+        if (
+          rule.allowRemember !== false &&
+          opts.hasRemember &&
+          opts.hasRemember(rule.id)
+        ) {
           return;
         }
 
@@ -66,6 +71,9 @@ export function createCollabExtension(
           input: event.input as Record<string, unknown>,
           reason: "rule",
           ruleId: rule.id,
+          ruleName: rule.name,
+          riskCategory: rule.riskCategory,
+          allowRemember: rule.allowRemember !== false,
           defaultDecision: "deny",
           createdAt: Date.now(),
         };
@@ -78,9 +86,17 @@ export function createCollabExtension(
           reason: resp.denyReason ?? rule.denyReason ?? "denied by user",
         };
       } catch (err) {
-        // R6：extension 自己抛错时默认放行，避免卡死 agent。
-        // 用 console.error 让 server 日志能看到，便于排查。
-        console.error("[collab] extension error, defaulting allow:", err);
+        const fallbackRule = matchRule(event, DEFAULT_RULES);
+        if (fallbackRule && fallbackRule.on !== "auto-allow") {
+          console.error("[collab] extension error, defaulting deny for high-risk tool:", err);
+          return {
+            block: true,
+            reason:
+              fallbackRule.denyReason ??
+              `Denied by built-in high-risk rule: ${fallbackRule.id}`,
+          };
+        }
+        console.error("[collab] extension error, defaulting allow for low-risk tool:", err);
         return;
       }
     });

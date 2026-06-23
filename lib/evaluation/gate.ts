@@ -1,3 +1,4 @@
+import type { ExecutionMainArtifact } from "@/lib/execution-contract/types";
 import type {
   CriterionScoreInput,
   EvaluateRubricInput,
@@ -28,6 +29,7 @@ export interface IndependentEvaluatorContractSummary {
   scope: string[];
   nonGoals: string[];
   requiredEvidence: string[];
+  mainArtifact?: ExecutionMainArtifact;
   rubricProfile: string;
   stopPolicy: {
     targetScore?: number;
@@ -122,6 +124,13 @@ function contractSummaryFrom(
         ? contract.requiredEvidence
         : rubric.criteria.flatMap((criterion) => criterion.evidenceRequired ?? [])
     ),
+    mainArtifact:
+      contract &&
+      "mainArtifact" in contract &&
+      contract.mainArtifact &&
+      typeof contract.mainArtifact === "object"
+        ? contract.mainArtifact
+        : undefined,
     rubricProfile: cleanText(
       contract && "rubricProfile" in contract ? contract.rubricProfile : rubric.profileId,
       160

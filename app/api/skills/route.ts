@@ -8,6 +8,7 @@
  *   - action="update"  + source?        更新指定包或全部
  */
 import { NextResponse } from "next/server";
+import { assertApiAccess } from "@/lib/api-boundary";
 import {
   getSettingsManager,
   getPackageManager,
@@ -29,6 +30,8 @@ function resolveCwd(input: string | null | undefined): string {
 }
 
 export async function GET(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   try {
     const url = new URL(req.url);
     const cwd = resolveCwd(url.searchParams.get("cwd"));
@@ -84,6 +87,8 @@ export async function GET(req: Request) {
 
 // PATCH /api/skills —— 切换 SKILL.md 的 disable-model-invocation 字段
 export async function PATCH(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   try {
     const body = (await req.json()) as {
       filePath?: string;
@@ -127,6 +132,8 @@ export async function PATCH(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   try {
     let body: Record<string, unknown> = {};
     try {

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertApiAccess } from "@/lib/api-boundary";
 import {
   allowBrowserSite,
   blockBrowserSite,
@@ -11,6 +12,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const url = new URL(req.url);
   const target = url.searchParams.get("url");
   if (!target) {
@@ -27,6 +30,8 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const type = body.type as string | undefined;
   const target = (body.origin as string | undefined) ?? (body.url as string | undefined);

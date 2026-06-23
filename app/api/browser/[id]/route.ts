@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertApiAccess } from "@/lib/api-boundary";
 import { getAgent, pushExternalEvent } from "@/lib/agent-registry";
 import {
   addBrowserAnnotation,
@@ -35,9 +36,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const { id } = await params;
   return NextResponse.json({
     snapshot: getBrowserSnapshot(id),
@@ -49,6 +52,8 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const { id } = await params;
   // browserId 解耦 agentId：只有 agent:<id>（或向后兼容的裸 agentId）才推 SSE；
   // standalone:/task: 域只返回 snapshot 给 BrowserPanel 本地 state。

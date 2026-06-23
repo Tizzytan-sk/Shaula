@@ -182,6 +182,12 @@ export interface BrowserExtensionOptions {
     detail: string;
     url: string | null;
   }) => Promise<boolean>;
+  onBrowserEvidence?: (input: {
+    toolName: string;
+    snapshot: BrowserSnapshot;
+    evidence: BrowserToolEvidence;
+    result?: BrowserVerifyResult;
+  }) => void | Promise<void>;
 }
 
 /** 所有 browser_* 工具统一的 details 形态（snapshot + 标准化 evidence）。 */
@@ -226,6 +232,26 @@ async function runWithBrowserState<T>(
   } catch (error) {
     opts.onBrowserState(getBrowserSnapshot(agentBrowserId(opts.getAgentId())));
     throw error;
+  }
+}
+
+async function recordBrowserEvidence(
+  opts: BrowserExtensionOptions,
+  input: {
+    toolName: string;
+    snapshot: BrowserSnapshot;
+    evidence: BrowserToolEvidence;
+    result?: BrowserVerifyResult;
+  }
+): Promise<void> {
+  if (!opts.onBrowserEvidence) return;
+  try {
+    await opts.onBrowserEvidence(input);
+  } catch (error) {
+    console.warn(
+      "[browser] evidence callback failed:",
+      error instanceof Error ? error.message : String(error)
+    );
   }
 }
 
@@ -626,10 +652,25 @@ The user can draw a region on the browser page and leave a comment. These page a
           );
           opts.onBrowserState(snapshot);
           const verified: BrowserVerifyResult = result;
+          const evidence = {
+            tool: "browser_verify",
+            passed: verified.passed,
+          };
+          await recordBrowserEvidence(opts, {
+            toolName: "browser_verify",
+            snapshot,
+            evidence: {
+              url: snapshot.url,
+              title: snapshot.title,
+              screenshotDataUrl: snapshot.screenshotDataUrl,
+              ...evidence,
+            },
+            result: verified,
+          });
           return toolResult(
             `${verified.passed ? "PASS" : "FAIL"}: ${verified.expectation}\n${verified.evidence}`,
             snapshot,
-            { tool: "browser_verify", passed: verified.passed }
+            evidence
           );
         },
       })

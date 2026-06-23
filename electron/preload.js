@@ -159,7 +159,7 @@ contextBridge.exposeInMainWorld("shaulaAgent", {
 
     /**
      * 宠物窗口请求弹出 native 右键菜单。
-     * payload schema 见 main.js pet:show-context-menu handler 注释。
+     * payload schema 见 pet-ipc.js pet:show-context-menu handler。
      */
     showContextMenu: (payload) =>
       ipcRenderer.send("pet:show-context-menu", payload ?? {}),

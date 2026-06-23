@@ -108,6 +108,8 @@ export interface AgentGoal {
   contractId?: string;
   lastEvaluation?: RubricEvaluation;
   lastClosure?: GoalRunClosure;
+  lastCompletionClaim?: GoalCompletionClaim;
+  lastFinalMessageAudit?: GoalFinalMessageAudit;
 
   // M1 additions (optional, backward compatible). turn/evidence history is NOT
   // nested here — it lives at the top level of the persisted envelope.
@@ -146,9 +148,44 @@ export interface GoalUpdatedEvent {
   goal: AgentGoal | null;
 }
 
+export interface GoalCompletionClaim {
+  finalSummary: string;
+  evidenceIds: string[];
+}
+
+export interface GoalActualFinalMessage {
+  text: string;
+  responseId?: string;
+  stopReason?: string;
+  endedAt: number;
+}
+
+export interface GoalFinalMessageAuditFinding {
+  severity: "warning" | "failed";
+  message: string;
+  evidenceIds?: string[];
+}
+
+export interface GoalFinalMessageAudit {
+  status: "passed" | "warning" | "failed";
+  actualMessage: GoalActualFinalMessage;
+  claim: GoalCompletionClaim;
+  evidenceIds: string[];
+  findings: GoalFinalMessageAuditFinding[];
+  createdAt: number;
+}
+
 export interface GoalUpdateInput {
   status: "complete" | "blocked";
   blockedReason?: string;
+  /**
+   * Structured draft of the final handoff. This is not the chat bubble itself;
+   * it gives the server-side verifier a stable completion claim to compare
+   * against recorded evidence before accepting `complete`.
+   */
+  finalSummary?: string;
+  /** Evidence ids cited by the final handoff summary. */
+  evidenceIds?: string[];
 }
 
 /**

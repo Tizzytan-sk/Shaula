@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { assertApiAccess } from "@/lib/api-boundary";
 import { findSessionPathById } from "@/lib/sessions";
 
 export const runtime = "nodejs";
@@ -48,9 +49,11 @@ async function loadExportFromFile(): Promise<ExportFn> {
 
 /** GET: 导出 session 为 HTML 字符串 */
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const { id } = await params;
   try {
     const path = await findSessionPathById(id);

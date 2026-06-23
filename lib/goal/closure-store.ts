@@ -15,9 +15,10 @@ export interface StoredGoalRunClosure {
 }
 
 export function evaluateAndStoreGoalRunClosure(
-  agentId: string
+  agentId: string,
+  options: { sessionId?: string | null } = {}
 ): StoredGoalRunClosure | null {
-  const collected = collectGoalVerificationInput(agentId);
+  const collected = collectGoalVerificationInput(agentId, undefined, options);
   if (!collected || collected.goal.status !== "active") return null;
 
   const verification = verifyGoalCompletion(collected.input);

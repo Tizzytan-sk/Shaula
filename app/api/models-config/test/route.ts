@@ -18,6 +18,7 @@ import {
   AuthStorage,
 } from "@earendil-works/pi-coding-agent";
 import { completeSimple } from "@earendil-works/pi-ai";
+import { assertApiAccess } from "@/lib/api-boundary";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -36,6 +37,8 @@ function trimStringField(v: unknown): string {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   let tempDir: string | undefined;
   const startedAt = Date.now();
   let httpStatus: number | undefined;

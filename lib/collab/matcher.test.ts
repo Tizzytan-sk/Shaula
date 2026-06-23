@@ -66,6 +66,24 @@ describe("matchRule", () => {
     expect(matchRule(makeEvent("bash", { command: "git reset --hard HEAD~1" }), [r])).toBe(r);
   });
 
+  it("inputMatch.regex 支持 flags", () => {
+    const r = rule("r1", {
+      toolName: "bash",
+      inputMatch: { command: { regex: "^remove-item\\b", flags: "i" } },
+    });
+    expect(matchRule(makeEvent("bash", { command: "Remove-Item -Recurse x" }), [r])).toBe(r);
+  });
+
+  it("inputMatch.contains 支持 caseInsensitive", () => {
+    const r = rule("r1", {
+      toolName: "bash",
+      inputMatch: {
+        command: { contains: ["git reset --hard"], caseInsensitive: true },
+      },
+    });
+    expect(matchRule(makeEvent("bash", { command: "GIT RESET --HARD HEAD" }), [r])).toBe(r);
+  });
+
   it("inputMatch.regex 不命中", () => {
     const r = rule("r1", {
       toolName: "bash",

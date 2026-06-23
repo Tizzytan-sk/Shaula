@@ -19,6 +19,7 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { assertApiAccess } from "@/lib/api-boundary";
 import { getModelRegistry } from "@/lib/agent-registry";
 import fs from "node:fs";
 import path from "node:path";
@@ -40,7 +41,9 @@ function readModelsJson(): unknown {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   try {
     const data = readModelsJson();
     return NextResponse.json({
@@ -56,6 +59,8 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   try {
     const body = await req.json();
     // 基本校验：必须是 object 且含 providers 字段（即使为空 dict）

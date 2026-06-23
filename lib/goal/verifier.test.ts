@@ -92,11 +92,183 @@ describe("goal verifier v1", () => {
           objective: "Check local UI",
           requiredEvidence: ["browser_observation"],
         },
+        completionClaim: {
+          finalSummary: "Browser observation confirms the local UI.",
+          evidenceIds: ["browser-proof"],
+        },
+        requireCompletionClaim: true,
       })
     );
 
     expect(result.decision).toBe("accept");
     expect(result.evaluation.status).toBe("passed");
+  });
+
+  it("rejects contracted completion without a structured final summary", () => {
+    const result = verifyGoalCompletion(
+      input({
+        goal: { objective: "Check local UI" },
+        evidence: [
+          {
+            id: "browser-proof",
+            kind: "browser",
+            title: "Browser observed UI",
+            createdAt: Date.now(),
+          },
+        ],
+        evaluationEvidence: [
+          {
+            id: "browser-proof",
+            kind: "screenshot",
+            title: "Browser observed UI",
+            trustLevel: "host_observed",
+            source: "browser:agent:agent-1",
+          },
+        ],
+        contract: {
+          objective: "Check local UI",
+          requiredEvidence: ["browser_observation"],
+        },
+        requireCompletionClaim: true,
+      })
+    );
+
+    expect(result.decision).toBe("reject");
+    expect(result.missingEvidence.join(" ")).toContain(
+      "Structured final summary is required"
+    );
+    expect(result.evaluation.hardFails).toContain("final-summary-evidence");
+  });
+
+  it("accepts a structured final summary that cites covering evidence", () => {
+    const result = verifyGoalCompletion(
+      input({
+        goal: { objective: "Ship feature" },
+        evidence: [
+          {
+            id: "test-proof",
+            kind: "test",
+            title: "Verification passed: npm test",
+            createdAt: Date.now(),
+          },
+        ],
+        evaluationEvidence: [
+          {
+            id: "test-proof",
+            kind: "test_result",
+            title: "Verification passed: npm test",
+            trustLevel: "deterministic_check",
+            source: "system:verification-plan",
+            outcome: "passed",
+            metadata: { evidenceRequired: ["test_result"] },
+          },
+        ],
+        contract: {
+          objective: "Ship feature",
+          requiredEvidence: ["test_result"],
+        },
+        completionClaim: {
+          finalSummary: "Implemented the feature and npm test passed.",
+          evidenceIds: ["test-proof"],
+        },
+        requireCompletionClaim: true,
+      })
+    );
+
+    expect(result.decision).toBe("accept");
+    expect(result.evaluation.criteria).toContainEqual(
+      expect.objectContaining({
+        criterionId: "final-summary-evidence",
+        status: "pass",
+        evidenceIds: ["test-proof"],
+      })
+    );
+  });
+
+  it("rejects a structured final summary without evidence citations", () => {
+    const result = verifyGoalCompletion(
+      input({
+        completionClaim: {
+          finalSummary: "The goal is complete.",
+          evidenceIds: [],
+        },
+      })
+    );
+
+    expect(result.decision).toBe("reject");
+    expect(result.missingEvidence.join(" ")).toContain(
+      "must cite at least one recorded evidence id"
+    );
+    expect(result.evaluation.hardFails).toContain("final-summary-evidence");
+  });
+
+  it("rejects a structured final summary that cites unknown evidence", () => {
+    const result = verifyGoalCompletion(
+      input({
+        completionClaim: {
+          finalSummary: "The goal is complete.",
+          evidenceIds: ["missing-proof"],
+        },
+      })
+    );
+
+    expect(result.decision).toBe("reject");
+    expect(result.missingEvidence.join(" ")).toContain(
+      "unknown evidence id: missing-proof"
+    );
+  });
+
+  it("rejects a structured final summary that cites evidence not covering the contract", () => {
+    const result = verifyGoalCompletion(
+      input({
+        goal: { objective: "Ship feature" },
+        evidence: [
+          {
+            id: "browser-proof",
+            kind: "browser",
+            title: "Browser observed UI",
+            createdAt: Date.now(),
+          },
+          {
+            id: "test-proof",
+            kind: "test",
+            title: "Verification passed: npm test",
+            createdAt: Date.now(),
+          },
+        ],
+        evaluationEvidence: [
+          {
+            id: "browser-proof",
+            kind: "screenshot",
+            title: "Browser observed UI",
+            trustLevel: "host_observed",
+            source: "browser:agent:agent-1",
+          },
+          {
+            id: "test-proof",
+            kind: "test_result",
+            title: "Verification passed: npm test",
+            trustLevel: "deterministic_check",
+            source: "system:verification-plan",
+            outcome: "passed",
+            metadata: { evidenceRequired: ["test_result"] },
+          },
+        ],
+        contract: {
+          objective: "Ship feature",
+          requiredEvidence: ["test_result"],
+        },
+        completionClaim: {
+          finalSummary: "The feature is done.",
+          evidenceIds: ["browser-proof"],
+        },
+      })
+    );
+
+    expect(result.decision).toBe("reject");
+    expect(result.missingEvidence.join(" ")).toContain(
+      "does not cite evidence covering required evidence"
+    );
   });
 
   it("rejects failed required verification evidence", () => {
@@ -129,6 +301,47 @@ describe("goal verifier v1", () => {
         contract: {
           objective: "Ship feature",
           requiredEvidence: ["test_result"],
+        },
+      })
+    );
+
+    expect(result.decision).toBe("reject");
+    expect(result.missingEvidence.join(" ")).toContain(
+      "Required verification failed"
+    );
+  });
+
+  it("rejects failed required browser verification evidence", () => {
+    const result = verifyGoalCompletion(
+      input({
+        goal: { objective: "Verify UI" },
+        evidence: [
+          {
+            id: "failed-browser",
+            kind: "browser",
+            title: "Browser verification failed: Browser observation",
+            createdAt: Date.now(),
+          },
+        ],
+        evaluationEvidence: [
+          {
+            id: "failed-browser",
+            kind: "screenshot",
+            title: "Browser verification failed: Browser observation",
+            trustLevel: "host_observed",
+            source: "browser:agent:agent-1",
+            outcome: "failed",
+            metadata: {
+              required: true,
+              verificationCheckId: "browser-observation",
+              verificationKind: "browser_observation",
+              evidenceRequired: ["browser_observation"],
+            },
+          },
+        ],
+        contract: {
+          objective: "Verify UI",
+          requiredEvidence: ["browser_observation"],
         },
       })
     );
@@ -197,6 +410,105 @@ describe("goal verifier v1", () => {
     expect(result.decision).toBe("reject");
     expect(result.missingEvidence.join(" ")).toContain(
       "Required verification failed"
+    );
+  });
+
+  it("rejects deterministic checks that ran before the latest diff", () => {
+    const result = verifyGoalCompletion(
+      input({
+        goal: { objective: "Ship feature" },
+        evidence: [
+          {
+            id: "passed-test",
+            kind: "test",
+            title: "Verification passed: npm test",
+            createdAt: 1,
+          },
+          {
+            id: "latest-diff",
+            kind: "diff",
+            title: "src/feature.ts diff",
+            href: "C:/repo/src/feature.ts",
+            createdAt: 2,
+          },
+        ],
+        evaluationEvidence: [
+          {
+            id: "passed-test",
+            kind: "test_result",
+            title: "Verification passed: npm test",
+            trustLevel: "deterministic_check",
+            source: "system:verification-plan",
+            outcome: "passed",
+            metadata: {
+              required: true,
+              verificationCommandId: "npm-test",
+              evidenceRequired: ["test_result"],
+            },
+            createdAt: 1,
+          },
+          {
+            id: "latest-diff",
+            kind: "diff",
+            title: "src/feature.ts diff",
+            href: "C:/repo/src/feature.ts",
+            trustLevel: "artifact_reference",
+            source: "progress",
+            createdAt: 2,
+          },
+        ],
+        contract: {
+          objective: "Ship feature",
+          requiredEvidence: ["diff", "test_result"],
+        },
+      })
+    );
+
+    expect(result.decision).toBe("reject");
+    expect(result.missingEvidence.join(" ")).toContain("Stale verification");
+  });
+
+  it("flags out-of-scope diff evidence for review without blocking completion", () => {
+    const result = verifyGoalCompletion(
+      input({
+        goal: { objective: "Ship scoped feature" },
+        evidence: [
+          {
+            id: "outside-diff",
+            kind: "diff",
+            title: "scripts/tool.ts diff",
+            href: "C:/repo/scripts/tool.ts",
+            createdAt: 2,
+          },
+        ],
+        evaluationEvidence: [
+          {
+            id: "outside-diff",
+            kind: "diff",
+            title: "scripts/tool.ts diff",
+            href: "C:/repo/scripts/tool.ts",
+            trustLevel: "artifact_reference",
+            source: "progress",
+            createdAt: 2,
+          },
+        ],
+        contract: {
+          objective: "Ship scoped feature",
+          scope: ["Only edit `C:/repo/src`."],
+          requiredEvidence: ["diff"],
+        },
+        completionClaim: {
+          finalSummary: "Implemented the scoped feature diff.",
+          evidenceIds: ["outside-diff"],
+        },
+        requireCompletionClaim: true,
+      })
+    );
+
+    expect(result.decision).toBe("accept");
+    expect(result.evaluation.status).toBe("warning");
+    expect(result.evaluation.triggeredPitfalls.join(" ")).toContain(
+      "out-of-scope diff"
     );
   });
 
@@ -283,9 +595,32 @@ describe("goal verifier v1", () => {
             { id: "c1", criterion: "All tests pass", status: "met" },
           ],
         },
+        completionClaim: {
+          finalSummary: "All acceptance criteria are met.",
+          evidenceIds: ["e1"],
+        },
+        requireCompletionClaim: true,
       })
     );
     expect(result.decision).toBe("accept");
+  });
+
+  it("rejects acceptance-gated completion without a structured final summary", () => {
+    const result = verifyGoalCompletion(
+      input({
+        goal: {
+          objective: "Ship feature",
+          acceptanceCriteria: [
+            { id: "c1", criterion: "All tests pass", status: "met" },
+          ],
+        },
+        requireCompletionClaim: true,
+      })
+    );
+    expect(result.decision).toBe("reject");
+    expect(result.missingEvidence.join(" ")).toContain(
+      "Structured final summary is required"
+    );
   });
 
   it("aggregates multiple missing reasons", () => {

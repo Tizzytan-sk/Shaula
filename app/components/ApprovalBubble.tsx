@@ -191,6 +191,7 @@ export const ApprovalBubble = memo(function ApprovalBubble({
 }: ApprovalBubbleProps) {
   const countdown = useCountdown(part.createdAt, APPROVAL_TIMEOUT_MS);
   const preview = previewInput(part.toolName, part.input);
+  const canRemember = part.allowRemember !== false;
   /**
    * B4：「本会话不再问」勾选框。
    * 只在有 ruleId 时显示——没有 ruleId 时 server 端 addSessionRemember 无 key 可写。
@@ -262,12 +263,17 @@ export const ApprovalBubble = memo(function ApprovalBubble({
         <ShieldAlert size={13} style={{ color: "var(--color-warning)" }} />
         <span>
           需要确认：{part.toolName}
-          {part.ruleId && (
+          {(part.ruleName || part.ruleId) && (
             <span
               className="ml-1"
               style={{ color: "var(--fg-faint)" }}
             >
-              ({part.ruleId})
+              ({part.ruleName ?? part.ruleId})
+            </span>
+          )}
+          {part.riskCategory && (
+            <span className="ml-1" style={{ color: "var(--fg-faint)" }}>
+              · {part.riskCategory}
             </span>
           )}
         </span>
@@ -297,7 +303,7 @@ export const ApprovalBubble = memo(function ApprovalBubble({
         </pre>
       )}
       <div className="flex items-center justify-between gap-2">
-        {part.ruleId ? (
+        {part.ruleId && canRemember ? (
           <label
             className="flex items-center gap-1.5 text-token-xs select-none cursor-pointer"
             style={{ color: "var(--text-muted)" }}

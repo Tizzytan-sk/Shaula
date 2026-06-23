@@ -1,6 +1,7 @@
 import "server-only";
 import type { EvaluationEvidence } from "@/lib/evaluation/types";
 import { listEvidence } from "@/lib/evidence/server-store";
+import type { EvidenceRef } from "@/lib/evidence/types";
 import {
   evidenceRefToEvaluationEvidence,
   evidenceRefToGoalEvidence,
@@ -26,7 +27,8 @@ export interface CollectedGoalVerificationInput {
 
 export function collectGoalVerificationInput(
   agentId: string,
-  currentGoal = getGoal(agentId)
+  currentGoal = getGoal(agentId),
+  options: { sessionId?: string | null } = {}
 ): CollectedGoalVerificationInput | null {
   if (!currentGoal) return null;
   const workflowRuns = listWorkflowRuns(agentId)
@@ -40,9 +42,10 @@ export function collectGoalVerificationInput(
   const storedGoalEvidence = listGoalEvidence(agentId).filter(
     (item) => item.createdAt >= currentGoal.createdAt
   );
-  const ledgerEvidence = listEvidence({ agentId }).filter(
-    (item) => item.createdAt >= currentGoal.createdAt
-  );
+  const ledgerEvidence = mergeEvidenceRefs([
+    ...listEvidence({ agentId }),
+    ...(options.sessionId ? listEvidence({ sessionId: options.sessionId }) : []),
+  ]).filter((item) => item.createdAt >= currentGoal.createdAt);
   const goalEvidence = mergeGoalEvidence([
     ...storedGoalEvidence,
     ...ledgerEvidence.map(evidenceRefToGoalEvidence),
@@ -81,5 +84,9 @@ function mergeGoalEvidence(items: GoalEvidence[]): GoalEvidence[] {
 function mergeEvaluationEvidence(
   items: EvaluationEvidence[]
 ): EvaluationEvidence[] {
+  return [...new Map(items.map((item) => [item.id, item])).values()];
+}
+
+function mergeEvidenceRefs(items: EvidenceRef[]): EvidenceRef[] {
   return [...new Map(items.map((item) => [item.id, item])).values()];
 }

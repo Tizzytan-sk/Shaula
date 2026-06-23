@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import os from "node:os";
 import path from "node:path";
+import { assertApiAccess } from "@/lib/api-boundary";
 import {
   abortSubagentsForParent,
   abortWorkflowsForParent,
@@ -23,6 +24,8 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const { id } = await params;
   const rec = getAgent(id);
   if (!rec) return NextResponse.json({ error: "agent not found" }, { status: 404 });
@@ -55,6 +58,8 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const { id } = await params;
   const rec = getAgent(id);
   if (!rec) return NextResponse.json({ error: "agent not found" }, { status: 404 });

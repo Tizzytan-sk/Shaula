@@ -19,271 +19,54 @@
  */
 import { NextResponse } from "next/server";
 import {
-  createAgent,
-  getAgent,
+  describeAgentRuntime,
   disposeAgent,
-  getModelRegistry,
-  abortSubagentsForParent,
-  abortWorkflowsForParent,
-  pushGoalEvent,
-  pushProgressEvent,
-  claimClientRequest,
-  clearClientRequest,
-  isLocalCodingAssistantAgent,
-  promptLocalCodingAssistantAgent,
-  abortLocalCodingAssistantAgent,
-  LOCAL_CODING_ASSISTANT_MODELS,
-  LOCAL_CODING_ASSISTANT_PROVIDER_ID,
+  getAgent,
 } from "@/lib/agent-registry";
 import {
-  clearGoal,
   getGoal,
-  listGoalEvidence,
-  listGoalTurns,
-  normalizeObjective,
-  setGoal,
-  setGoalStatus,
 } from "@/lib/goal/server-store";
-import { applyGoalUpdate } from "@/lib/goal/update";
-import { buildExecutionContract } from "@/lib/execution-contract/build";
+import { getExecutionContract } from "@/lib/execution-contract/store";
 import {
-  getExecutionContract,
-  putExecutionContract,
-} from "@/lib/execution-contract/store";
-import type { ExecutionContract } from "@/lib/execution-contract/types";
-import { listDefinitions } from "@/lib/subagents/registry";
-import {
-  buildAgentMentionDirective,
-  stripAgentMentions,
-} from "@/lib/subagents/router";
-import {
-  clearProgress,
-  failOpenProgress,
   getProgress,
-  updateProgress,
 } from "@/lib/progress/server-store";
-import {
-  readPersistedProgress,
-  writePersistedProgress,
-} from "@/lib/progress/file-store";
-import { appendEvidence, listEvidence } from "@/lib/evidence/server-store";
-import { listEvaluationActions } from "@/lib/evaluation-actions/store";
+import { readPersistedProgress } from "@/lib/progress/file-store";
 import { listPendingClarifications } from "@/lib/clarification/server-store";
-import type {
-  EvidenceKind,
-  EvidenceSourceType,
-  EvidenceTrustLevel,
-} from "@/lib/evidence/types";
-import { listRuntimeEvents } from "@/lib/runtime/event-store";
-import { inferAdvisoryRouteDecision } from "@/lib/task-router/advisory";
-import {
-  latestRouteDecision,
-  listRouteDecisions,
-  recordRouteDecision,
-} from "@/lib/task-router/server-store";
-import type { AdvisoryRouteKind } from "@/lib/task-router/types";
-import type {
-  RuntimeEventSource,
-  RuntimeEventStatus,
-} from "@/lib/runtime/events";
-import {
-  CONTEXT_ASIDE_OPEN,
-  CONTEXT_ASIDE_CLOSE,
-  stripContextAside,
-} from "@/lib/context-aside";
 import { assertRemoteAuth } from "@/lib/remote/auth";
-import { runGoalVerificationPlanForAgent } from "@/lib/verification/goal-runner";
-import type { ProgressUpdateInput } from "@/lib/progress/types";
-import type { ThinkingLevel, ImageContentLite } from "@/lib/types";
-
-/** 校验并清洗 body.images */
-function parseImages(raw: unknown): ImageContentLite[] | undefined {
-  if (!Array.isArray(raw) || raw.length === 0) return undefined;
-  const out: ImageContentLite[] = [];
-  for (const it of raw) {
-    if (
-      it &&
-      typeof it === "object" &&
-      typeof (it as { data?: unknown }).data === "string" &&
-      typeof (it as { mimeType?: unknown }).mimeType === "string"
-    ) {
-      out.push({
-        type: "image",
-        data: (it as { data: string }).data,
-        mimeType: (it as { mimeType: string }).mimeType,
-      });
-    }
-  }
-  return out.length > 0 ? out : undefined;
-}
-
-function parseProgressUpdate(body: Record<string, unknown>): ProgressUpdateInput {
-  return {
-    steps: Array.isArray(body.steps)
-      ? (body.steps as ProgressUpdateInput["steps"])
-      : undefined,
-    artifacts: Array.isArray(body.artifacts)
-      ? (body.artifacts as ProgressUpdateInput["artifacts"])
-      : undefined,
-    replaceSteps: body.replaceSteps === true,
-    replaceArtifacts: body.replaceArtifacts === true,
-  };
-}
-
-async function persistProgressForAgent(
-  rec: NonNullable<ReturnType<typeof getAgent>>,
-  progress: ReturnType<typeof getProgress>
-): Promise<void> {
-  try {
-    await writePersistedProgress(rec.session.sessionId, progress);
-  } catch {
-    // Progress persistence is best-effort; UI should not fail a tool/run because
-    // the auxiliary runtime cache cannot be written.
-  }
-}
-
-function parseStringList(raw: unknown): string[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const values = raw
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .slice(0, 12);
-  return values.length > 0 ? values : undefined;
-}
-
-function shortText(value: string, max = 120): string {
-  const compact = value.replace(/\s+/g, " ").trim();
-  return compact.length > max ? `${compact.slice(0, max - 1)}...` : compact;
-}
-
-function buildPromptRunProtocol(contract: ExecutionContract): string {
-  return [
-    "Shaula task contract for this run:",
-    `- id: ${contract.id}`,
-    `- objective: ${contract.objective}`,
-    `- rubric profile: ${contract.rubricProfile}`,
-    `- required evidence: ${contract.requiredEvidence.join(", ") || "goal_evidence"}`,
-    "",
-    "Execution protocol:",
-    "1. Before meaningful edits, identify the active project surface and main artifact: cwd, entrypoint, URL/file, or output path. If multiple candidates exist, choose one explicitly or ask when the choice is risky.",
-    "2. For product/UI/workbench/dashboard tasks, set the information architecture before local component patching: first-screen purpose, key metrics/status, next user action, detail surfaces, and acceptance criteria.",
-    "3. If the user has already rejected two iterations or says the result is still wrong/乱/没改好, stop cosmetic patching and run structural diagnosis before more edits.",
-    "4. Use update_progress early. Keep the visible steps current and attach artifacts for files, URLs, screenshots, tests, diffs, logs, or browser observations.",
-    "5. For frontend/UI work, verify with a browser observation or screenshot when possible; build/typecheck alone is not enough to claim the experience works.",
-    "6. At handoff, state the main artifact, verification evidence, satisfied criteria, and any known gaps. Do not claim completion from intention alone.",
-    "",
-    "File governance:",
-    "- Do not create sibling project directories, temporary leading-space folders, or multiple unexplained versions.",
-    "- If exploration versions are necessary, label exactly one as active and explain archive/draft paths.",
-  ].join("\n");
-}
-
-function initialPromptProgress(contract: ExecutionContract): ProgressUpdateInput {
-  const objective = shortText(contract.objective, 140);
-  return {
-    replaceSteps: true,
-    replaceArtifacts: true,
-    steps: [
-      {
-        id: "task-contract",
-        title: `确认任务契约：${objective}`,
-        status: "completed",
-        summary: `${contract.rubricProfile} · evidence: ${
-          contract.requiredEvidence.join(", ") || "goal_evidence"
-        }`,
-      },
-      {
-        id: "main-artifact",
-        title: "锁定主产物",
-        status: "running",
-        summary: "先确认用户最终应该打开或检查的文件、URL、页面或输出路径。",
-      },
-      {
-        id: "execute-work",
-        title: "执行改动或分析",
-        status: "pending",
-        summary: "按契约范围推进，不做无关重构。",
-      },
-      {
-        id: "verify-handoff",
-        title: "验证并交付",
-        status: "pending",
-        summary: "跑必要检查，交付主产物、验证结果和剩余缺口。",
-      },
-    ],
-    artifacts: [
-      {
-        id: `contract-${contract.id}`,
-        kind: "other",
-        title: "任务契约",
-        summary: `${objective} · ${contract.rubricProfile}`,
-        requiredEvidence: contract.requiredEvidence,
-        contractCriterionId: "objective-met",
-      },
-    ],
-  };
-}
-
-function messageFromError(error: unknown): string {
-  return error instanceof Error && error.message
-    ? error.message
-    : "Goal prompt failed to start.";
-}
-
-function startGoalPromptInBackground(
-  rec: NonNullable<ReturnType<typeof getAgent>>,
-  prompt: string
-): void {
-  if (!rec.isStreaming) {
-    rec.isPromptStarting = true;
-    rec.updatedAt = Date.now();
-    setTimeout(() => {
-      if (rec.isPromptStarting && !rec.isStreaming) {
-        rec.isPromptStarting = false;
-        rec.updatedAt = Date.now();
-      }
-    }, 30_000);
-  }
-  queueMicrotask(() => {
-    void (async () => {
-      try {
-        if (isLocalCodingAssistantAgent(rec)) {
-          await promptLocalCodingAssistantAgent(rec, prompt);
-        } else if (rec.isStreaming) {
-          await rec.session.followUp(prompt);
-        } else {
-          await rec.session.prompt(prompt);
-        }
-      } catch (error) {
-        const message = messageFromError(error);
-        console.error("[goal_set] background prompt failed:", error);
-        const progress = failOpenProgress(
-          rec.id,
-          `Goal start failed: ${message}`
-        );
-        await persistProgressForAgent(rec, progress);
-        pushProgressEvent(rec, progress);
-        const goal = getGoal(rec.id);
-        if (goal?.status === "active") {
-          const paused = setGoalStatus(rec.id, "paused", {
-            pauseReason: `Goal start failed: ${message}`,
-          });
-          pushGoalEvent(rec, paused);
-        }
-        if (rec.isPromptStarting) {
-          rec.isPromptStarting = false;
-          rec.updatedAt = Date.now();
-        }
-      }
-    })();
-  });
-}
+import {
+  handleGoalPostAction,
+  isGoalPostAction,
+} from "@/lib/agent-actions/goal-actions";
+import {
+  handleProgressEvidencePostAction,
+  isProgressEvidencePostAction,
+} from "@/lib/agent-actions/progress-actions";
+import {
+  handleModelToolPostAction,
+  isModelToolPostAction,
+} from "@/lib/agent-actions/model-tool-actions";
+import {
+  handlePromptPostAction,
+  isPromptPostAction,
+} from "@/lib/agent-actions/prompt-actions";
+import {
+  handleAgentQueryAction,
+  isAgentQueryAction,
+} from "@/lib/agent-actions/query-actions";
+import {
+  handleTeamPostAction,
+  isTeamPostAction,
+} from "@/lib/agent-actions/team-actions";
+import {
+  handleLifecyclePostAction,
+  isLifecyclePostAction,
+} from "@/lib/agent-actions/lifecycle-actions";
+import type { AgentPostActionResult } from "@/lib/agent-actions/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** GET: agent meta + 可选 ?action=get_tools / context / thinking_levels */
+/** GET: agent meta + 可选 ?action=<query_action> */
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -297,135 +80,10 @@ export async function GET(
   const url = new URL(req.url);
   const action = url.searchParams.get("action");
 
-  if (action === "get_tools") {
-    // 用 SDK 的 getAllTools()/getActiveToolNames() 返回全量工具 + 当前已启用的名字
-    try {
-      const all = rec.session.getAllTools();
-      const active = rec.session.getActiveToolNames();
-      return NextResponse.json({ tools: all, active });
-    } catch (e) {
-      return NextResponse.json(
-        { error: (e as Error).message, tools: [], active: [] },
-        { status: 500 }
-      );
-    }
-  }
-  if (action === "thinking_levels") {
-    return NextResponse.json({
-      levels: rec.session.getAvailableThinkingLevels(),
-      current: rec.session.thinkingLevel,
-      supports: rec.session.supportsThinking(),
-    });
-  }
-  if (action === "user_messages_for_forking") {
-    // 剥离「上下文 aside」，fork 列表只显示用户原话。
-    const messages = rec.session.getUserMessagesForForking().map((m) => ({
-      ...m,
-      text: typeof m.text === "string" ? stripContextAside(m.text) : m.text,
-    }));
-    return NextResponse.json({ messages });
-  }
-  if (action === "tree") {
-    // 返回 SDK 的 session tree + 当前 leafId，用于 Branches 视图。
-    // tree 节点带 entry/children/label，前端按 type=message 展示，其它类型可省略或淡化。
-    try {
-      const sm = rec.session.sessionManager;
-      const tree = sm.getTree();
-      const leafId = sm.getLeafId();
-      return NextResponse.json({ tree, leafId });
-    } catch (e) {
-      return NextResponse.json(
-        { error: (e as Error).message, tree: [], leafId: null },
-        { status: 500 }
-      );
-    }
-  }
-  if (action === "system_prompt") {
-    try {
-      return NextResponse.json({
-        systemPrompt: rec.session.systemPrompt ?? "",
-      });
-    } catch (e) {
-      return NextResponse.json(
-        { error: (e as Error).message, systemPrompt: "" },
-        { status: 500 }
-      );
-    }
-  }
-  if (action === "goal_timeline") {
-    // Goal timeline: goal (incl. structured blockedState) plus its persisted
-    // turn and evidence history. Survives restart (read from the goal store).
-    const goal = getGoal(id);
-    return NextResponse.json({
-      goal,
-      contract: getExecutionContract(goal?.contractId),
-      lastClosure: goal?.lastClosure ?? null,
-      turns: listGoalTurns(id),
-      evidence: listGoalEvidence(id),
-      ledgerEvidence: listEvidence({ agentId: id }),
-      actions: listEvaluationActions({ agentId: id, status: "open" }),
-      routeDecision: latestRouteDecision(id),
-    });
-  }
-
-  if (action === "route_decisions") {
-    return NextResponse.json({
-      decisions: listRouteDecisions({ agentId: id }),
-    });
-  }
-
-  if (action === "runtime_events") {
-    return NextResponse.json({
-      events: listRuntimeEvents({
-        agentId: id,
-        source: parseRuntimeEventSource(url.searchParams.get("source")),
-        status: parseRuntimeEventStatus(url.searchParams.get("status")),
-        browserId: url.searchParams.get("browserId") ?? undefined,
-        taskId: url.searchParams.get("taskId") ?? undefined,
-        workflowId: url.searchParams.get("workflowId") ?? undefined,
-        parentId: url.searchParams.get("parentId") ?? undefined,
-      }),
-    });
-  }
-
-  if (action === "evidence") {
-    return NextResponse.json({
-      evidence: listEvidence({
-        agentId: id,
-        kind: parseEvidenceKind(url.searchParams.get("kind")),
-        trustLevel: parseEvidenceTrustLevel(url.searchParams.get("trustLevel")),
-        sourceType: parseEvidenceSourceType(url.searchParams.get("sourceType")),
-        contractCriterionId:
-          url.searchParams.get("contractCriterionId") ?? undefined,
-        rubricCriterionId:
-          url.searchParams.get("rubricCriterionId") ?? undefined,
-        browserId: url.searchParams.get("browserId") ?? undefined,
-        taskId: url.searchParams.get("taskId") ?? undefined,
-        workflowId: url.searchParams.get("workflowId") ?? undefined,
-      }),
-    });
-  }
-
-  if (action === "stats") {
-    // 实时 token/cost/context window 统计（pi-web 风格 HUD）
-    try {
-      const stats = rec.session.getSessionStats();
-      const ctxUsage = rec.session.getContextUsage();
-      const model = rec.session.model;
-      return NextResponse.json({
-        stats,
-        contextUsage: ctxUsage ?? null,
-        contextWindow: model?.contextWindow ?? null,
-        model: model
-          ? { provider: model.provider, id: model.id, name: model.name }
-          : null,
-      });
-    } catch (e) {
-      return NextResponse.json(
-        { error: (e as Error).message },
-        { status: 500 }
-      );
-    }
+  if (isAgentQueryAction(action)) {
+    return actionResultResponse(
+      await handleAgentQueryAction({ action, agentId: id, rec, url })
+    );
   }
 
   const memoryProgress = getProgress(id);
@@ -462,107 +120,14 @@ export async function GET(
     goal,
     contract: getExecutionContract(goal?.contractId ?? rec.activeContractId),
     progress: persistedProgress ?? memoryProgress,
+    runtimeProfile: describeAgentRuntime(rec),
   });
 }
 
-function parseRuntimeEventSource(
-  value: string | null
-): RuntimeEventSource | undefined {
-  return value === "agent" ||
-    value === "browser" ||
-    value === "workflow" ||
-    value === "subagent" ||
-    value === "goal" ||
-    value === "approval" ||
-    value === "progress"
-    ? value
-    : undefined;
-}
-
-function parseRuntimeEventStatus(
-  value: string | null
-): RuntimeEventStatus | undefined {
-  return value === "queued" ||
-    value === "running" ||
-    value === "done" ||
-    value === "error" ||
-    value === "blocked" ||
-    value === "aborted"
-    ? value
-    : undefined;
-}
-
-function parseEvidenceKind(value: string | null): EvidenceKind | undefined {
-  return value === "browser_snapshot" ||
-    value === "browser_step" ||
-    value === "browser_annotation" ||
-    value === "workflow_artifact" ||
-    value === "subagent_result" ||
-    value === "goal_turn" ||
-    value === "approval_decision" ||
-    value === "progress_artifact" ||
-    value === "verification_result" ||
-    value === "log"
-    ? value
-    : undefined;
-}
-
-function parseEvidenceTrustLevel(
-  value: string | null
-): EvidenceTrustLevel | undefined {
-  return value === "agent_reported" ||
-    value === "textual_log" ||
-    value === "artifact_reference" ||
-    value === "deterministic_check" ||
-    value === "host_observed" ||
-    value === "user_confirmed"
-    ? value
-    : undefined;
-}
-
-function parseEvidenceSourceType(
-  value: string | null
-): EvidenceSourceType | undefined {
-  return value === "agent" ||
-    value === "browser" ||
-    value === "progress" ||
-    value === "workflow" ||
-    value === "subagent" ||
-    value === "approval" ||
-    value === "goal" ||
-    value === "task" ||
-    value === "system" ||
-    value === "unknown"
-    ? value
-    : undefined;
-}
-
-function parseAdvisoryRouteKind(value: unknown): AdvisoryRouteKind | undefined {
-  return value === "direct" ||
-    value === "goal" ||
-    value === "workflow_template" ||
-    value === "workflow_script" ||
-    value === "subagent_batch" ||
-    value === "browser_task" ||
-    value === "ask_user"
-    ? value
-    : undefined;
-}
-
-function parseRouteOverride(
-  body: Record<string, unknown>
-): { route?: AdvisoryRouteKind; reason?: string } | undefined {
-  const raw =
-    body.routeOverride && typeof body.routeOverride === "object"
-      ? (body.routeOverride as Record<string, unknown>)
-      : body;
-  const route = parseAdvisoryRouteKind(raw.route);
-  const reason = typeof raw.routeOverrideReason === "string"
-    ? raw.routeOverrideReason
-    : typeof raw.reason === "string"
-      ? raw.reason
-      : undefined;
-  return route || reason ? { route, reason } : undefined;
+function actionResultResponse(result: AgentPostActionResult) {
+  return result.status
+    ? NextResponse.json(result.body, { status: result.status })
+    : NextResponse.json(result.body);
 }
 
 /** POST: 多 action 派发 */
@@ -595,564 +160,48 @@ export async function POST(
   }
 
   try {
-    switch (type) {
-      case "prompt": {
-        const text = body.text as string;
-        if (!text || typeof text !== "string") {
-          return NextResponse.json(
-            { error: "text required" },
-            { status: 400 }
-          );
-        }
-        const clientRequestId =
-          typeof body.clientRequestId === "string"
-            ? body.clientRequestId.trim().slice(0, 128)
-            : "";
-        if (
-          clientRequestId &&
-          !claimClientRequest(rec.id, clientRequestId)
-        ) {
-          return NextResponse.json({ ok: true, deduped: true });
-        }
-        const images = parseImages(body.images);
-        // 附件引用（@path）：前端单独传 attachments，不再拼进展示文本。
-        const attachments = Array.isArray(body.attachments)
-          ? (body.attachments as unknown[]).filter(
-              (a): a is string => typeof a === "string"
-            )
-          : [];
-
-        // 浏览器交互不再在 prompt 前「预执行」。
-        // agent 现在通过结构化 browser_* 工具自主多步操作浏览器
-        // （见 lib/browser/extension.ts），每步会通过 SSE 推 browser_state，
-        // 因此这里不再做基于正则的意图预跑（避免同一句话被执行两次）。
-
-        // 1) 解析显式 @agent 提及。展示给用户的气泡用「剥离 @ 后的干净原话」，
-        //    而把「委托专家」的指令放进独立上下文（aside），不污染 user 气泡。
-        const specialistIds = listDefinitions(rec.cwd).map((d) => d.id);
-        const mentionDirective = buildAgentMentionDirective(text, specialistIds);
-        const displayText = mentionDirective
-          ? stripAgentMentions(text, specialistIds) || text
-          : text;
-
-        // 2) 汇总所有「优化用」的上下文片段。这些只喂给模型，不进 user 气泡：
-        //    - 文件附件引用（@path）
-        //    - @agent 委托指令（directive）
-        const asideSections: string[] = [];
-        if (attachments.length > 0) {
-          asideSections.push(
-            `Referenced files/folders (read or list as needed):\n${attachments
-              .map((p) => `@${p}`)
-              .join(" ")}`
-          );
-        }
-        if (mentionDirective) {
-          asideSections.push(mentionDirective.directive);
-        }
-        const activeGoal = getGoal(id);
-        const routeDecision = recordRouteDecision(
-          inferAdvisoryRouteDecision({
-            agentId: id,
-            text,
-            hasActiveGoal: activeGoal?.status === "active",
-            attachments,
-            mentionedAgents: mentionDirective?.agentIds,
-            override: parseRouteOverride(body),
-          })
-        );
-        let promptContract: ExecutionContract | null = null;
-        let promptProgress: ReturnType<typeof getProgress> | null = null;
-        if (!rec.isStreaming && activeGoal?.status !== "active") {
-          promptContract = putExecutionContract(
-            buildExecutionContract({
-              agentId: id,
-              objective: text,
-            })
-          );
-          rec.activeContractId = promptContract.id;
-          asideSections.push(buildPromptRunProtocol(promptContract));
-          promptProgress = updateProgress(
-            id,
-            initialPromptProgress(promptContract)
-          );
-          await persistProgressForAgent(rec, promptProgress);
-          pushProgressEvent(rec, promptProgress);
-        }
-
-        const asideContext = asideSections.join("\n\n");
-
-        // 3) 组装发给模型的文本：用户原话 + 用分隔标记包裹的上下文。
-        //    为什么不用 sendCustomMessage(role:"custom") 注入？
-        //    —— 本项目用的 local shim 是非标准 OpenAI 兼容端，不认识 role:"custom"
-        //    的旁注消息，注入后模型会吐空（空气泡）。因此把上下文作为标准 user
-        //    message 文本的一部分发送，shim 完全认识。
-        //    前端渲染 user 气泡时会用同样的标记把这段上下文剥离，只显示原话，
-        //    从而做到「展示=原文，发送=带上下文」。
-        const finalText = asideContext
-          ? `${displayText}\n\n${CONTEXT_ASIDE_OPEN}\n${asideContext}\n${CONTEXT_ASIDE_CLOSE}`
-          : displayText;
-
-        try {
-          if (isLocalCodingAssistantAgent(rec)) {
-            await promptLocalCodingAssistantAgent(rec, finalText);
-            return NextResponse.json({
-              ok: true,
-              routeDecision,
-              ...(promptContract ? { contract: promptContract } : {}),
-              ...(promptProgress ? { progress: promptProgress } : {}),
-              ...(mentionDirective
-                ? { routedSpecialists: mentionDirective.agentIds }
-                : {}),
-            });
-          }
-          // 如果当前在 streaming，默认按 followUp 处理；否则正常 prompt
-          if (rec.isStreaming) {
-            await rec.session.prompt(finalText, {
-              streamingBehavior: "followUp",
-              images,
-            });
-          } else {
-            await rec.session.prompt(finalText, images ? { images } : undefined);
-          }
-        } catch (e) {
-          clearClientRequest(rec.id, clientRequestId);
-          throw e;
-        }
-        return NextResponse.json({
-          ok: true,
-          routeDecision,
-          ...(promptContract ? { contract: promptContract } : {}),
-          ...(promptProgress ? { progress: promptProgress } : {}),
-          ...(mentionDirective
-            ? { routedSpecialists: mentionDirective.agentIds }
-            : {}),
-        });
-      }
-
-      case "steer":
-      case "steering": {
-        const text = body.text as string;
-        if (!text || typeof text !== "string") {
-          return NextResponse.json(
-            { error: "text required" },
-            { status: 400 }
-          );
-        }
-        const images = parseImages(body.images);
-        if (isLocalCodingAssistantAgent(rec)) {
-          void images;
-          await promptLocalCodingAssistantAgent(rec, text);
-          return NextResponse.json({ ok: true });
-        }
-        await rec.session.steer(text, images);
-        return NextResponse.json({ ok: true });
-      }
-
-      case "follow_up":
-      case "followUp": {
-        const text = body.text as string;
-        if (!text || typeof text !== "string") {
-          return NextResponse.json(
-            { error: "text required" },
-            { status: 400 }
-          );
-        }
-        const images = parseImages(body.images);
-        if (isLocalCodingAssistantAgent(rec)) {
-          void images;
-          await promptLocalCodingAssistantAgent(rec, text);
-          return NextResponse.json({ ok: true });
-        }
-        await rec.session.followUp(text, images);
-        return NextResponse.json({ ok: true });
-      }
-
-      case "goal_status": {
-        const goal = getGoal(id);
-        return NextResponse.json({
-          ok: true,
-          goal,
-          contract: getExecutionContract(goal?.contractId ?? rec.activeContractId),
-          progress: getProgress(id),
-          routeDecision: latestRouteDecision(id),
-        });
-      }
-
-      case "goal_run_verification": {
-        const result = await runGoalVerificationPlanForAgent({
-          agentId: id,
-          cwd: rec.cwd,
-          sessionId: rec.session.sessionId,
-          requiredOnly: true,
-        });
-        if (result.goal) pushGoalEvent(rec, result.goal);
-        return NextResponse.json({ ok: true, ...result });
-      }
-
-      case "goal_set": {
-        const objective = normalizeObjective(body.objective);
-        if (!objective) {
-          return NextResponse.json(
-            { error: "objective required" },
-            { status: 400 }
-          );
-        }
-        const tokenBudget =
-          typeof body.tokenBudget === "number" ? body.tokenBudget : undefined;
-        const contract = putExecutionContract(
-          buildExecutionContract({
-            agentId: id,
-            objective,
-            tokenBudget,
-            rubricProfile:
-              typeof body.rubricProfile === "string"
-                ? body.rubricProfile
-                : undefined,
-            requiredEvidence: parseStringList(body.requiredEvidence),
-          })
-        );
-        rec.activeContractId = contract.id;
-        const goal = setGoal(id, objective, tokenBudget, {
-          contractId: contract.id,
-        });
-        const routeDecision = recordRouteDecision(
-          inferAdvisoryRouteDecision({
-            agentId: id,
-            text: objective,
-            override: {
-              route: "goal",
-              reason: "User explicitly started a goal.",
-            },
-          })
-        );
-        pushGoalEvent(rec, goal);
-        const progress = updateProgress(id, initialPromptProgress(contract));
-        await persistProgressForAgent(rec, progress);
-        pushProgressEvent(rec, progress);
-
-        const prompt = [
-          "Start working toward this active goal:",
-          "",
-          objective,
-          "",
-          "Execution contract:",
-          `- id: ${contract.id}`,
-          `- rubric profile: ${contract.rubricProfile}`,
-          `- required evidence: ${contract.requiredEvidence.join(", ")}`,
-          "",
-          "The goal text is both the starting prompt and the completion criteria.",
-          "Use the execution contract as the source of scope, non-goals, evidence expectations, and completion judgment.",
-          "For multi-step work, call update_progress early with concrete progress nodes and keep it current as milestones finish.",
-          "Attach evidence artifacts with update_progress when you create files, URLs, screenshots, tests, diffs, logs, or browser observations.",
-          "If the full goal is achieved, call goal_update with status=complete.",
-          "If you are truly blocked and cannot make meaningful progress without user input or an external change, call goal_update with status=blocked and include a short blockedReason.",
-        ].join("\n");
-
-        startGoalPromptInBackground(rec, prompt);
-        return NextResponse.json({
-          ok: true,
-          goal,
-          contract,
-          routeDecision,
-          promptStarted: "background",
-        });
-      }
-
-      case "goal_pause": {
-        const goal = setGoalStatus(id, "paused", {
-          pauseReason:
-            typeof body.reason === "string" ? body.reason : "Paused by user.",
-        });
-        pushGoalEvent(rec, goal);
-        return NextResponse.json({ ok: true, goal });
-      }
-
-      case "goal_resume": {
-        const goal = setGoalStatus(id, "active");
-        pushGoalEvent(rec, goal);
-        if (goal && !rec.isStreaming) {
-          await rec.session.prompt(
-            [
-              "Resume working toward the active goal:",
-              "",
-              goal.objective,
-              "",
-              "Do the next useful step. Use goal_update when the goal is complete or truly blocked.",
-            ].join("\n")
-          );
-        }
-        return NextResponse.json({ ok: true, goal });
-      }
-
-      case "goal_clear": {
-        clearGoal(id);
-        rec.activeContractId = undefined;
-        const progress = clearProgress(id);
-        await persistProgressForAgent(rec, progress);
-        pushGoalEvent(rec, null);
-        pushProgressEvent(rec, progress);
-        return NextResponse.json({ ok: true, goal: null, contract: null, progress });
-      }
-
-      case "progress_update": {
-        const progress = updateProgress(id, parseProgressUpdate(body));
-        await persistProgressForAgent(rec, progress);
-        pushProgressEvent(rec, progress);
-        return NextResponse.json({ ok: true, progress });
-      }
-
-      case "evidence_record_browser_observation": {
-        const passed = body.passed === true;
-        const title =
-          typeof body.title === "string" && body.title.trim()
-            ? body.title.trim().slice(0, 140)
-            : passed
-              ? "Host browser observation passed"
-              : "Host browser observation failed";
-        const url =
-          typeof body.url === "string" && body.url.trim()
-            ? body.url.trim().slice(0, 1000)
-            : undefined;
-        const textPreview =
-          typeof body.textPreview === "string"
-            ? body.textPreview.slice(0, 1200)
-            : undefined;
-        const createdAt = Date.now();
-        const evidence = appendEvidence({
-          id: `host-browser-observation:${id}:${createdAt}`,
-          kind: "browser_snapshot",
-          title,
-          agentId: id,
-          sessionId: rec.session.sessionId,
-          browserId: `agent:${id}`,
-          url,
-          textPreview,
-          trustLevel: "host_observed",
-          source: { type: "browser", id: `agent:${id}` },
-          criteria: [{ requiredEvidence: "browser_observation" }],
-          metadata: {
-            status: passed ? "passed" : "failed",
-            outcome: passed ? "passed" : "failed",
-            observedBy: "provider-dogfood-runner",
-          },
-          createdAt,
-          updatedAt: createdAt,
-        });
-        return NextResponse.json({ ok: true, evidence });
-      }
-
-      case "goal_update": {
-        const status = body.status;
-        if (status !== "complete" && status !== "blocked") {
-          return NextResponse.json(
-            { error: "status must be complete or blocked" },
-            { status: 400 }
-          );
-        }
-        // Route through the stop-time verifier so a premature `complete` is
-        // rejected instead of silently closing the goal.
-        const result = applyGoalUpdate(id, {
-          status,
-          blockedReason:
-            typeof body.blockedReason === "string"
-              ? body.blockedReason
-              : undefined,
-        });
-        if (result.goal) pushGoalEvent(rec, result.goal);
-        return NextResponse.json({
-          ok: true,
-          goal: result.goal,
-          accepted: result.accepted,
-          ...(result.rejectionNote
-            ? { rejectionNote: result.rejectionNote }
-            : {}),
-          ...(result.evaluation ? { evaluation: result.evaluation } : {}),
-        });
-      }
-
-      case "abort": {
-        const progress = failOpenProgress(id, "用户已中止当前任务。");
-        await persistProgressForAgent(rec, progress);
-        pushProgressEvent(rec, progress);
-        await abortWorkflowsForParent(id);
-        await abortSubagentsForParent(id);
-        if (isLocalCodingAssistantAgent(rec)) await abortLocalCodingAssistantAgent(rec);
-        else await rec.session.abort();
-        // SDK 不一定会再送 agent_end（底层 stream 已被拆）。为避免 sidebar 黄点
-        // 一直亮着，这里主动将 record.isStreaming 扯低。getRunningSessionFiles 下一
-        // 次被 GET /api/sessions 调用时就会不再含该 sessionFile。
-        rec.isStreaming = false;
-        rec.isPromptStarting = false;
-        rec.updatedAt = Date.now();
-        return NextResponse.json({ ok: true, progress });
-      }
-
-      case "abort_compaction":
-      case "abortCompaction": {
-        rec.session.abortCompaction();
-        return NextResponse.json({ ok: true });
-      }
-
-      case "compact": {
-        const customInstructions = body.customInstructions as
-          | string
-          | undefined;
-        const result = await rec.session.compact(customInstructions);
-        return NextResponse.json({ ok: true, result });
-      }
-
-      case "set_model":
-      case "setModel": {
-        const provider = body.provider as string;
-        const modelId = body.modelId as string;
-        if (!provider || !modelId) {
-          return NextResponse.json(
-            { error: "provider and modelId required" },
-            { status: 400 }
-          );
-        }
-        if (provider === LOCAL_CODING_ASSISTANT_PROVIDER_ID) {
-          const model = LOCAL_CODING_ASSISTANT_MODELS.find((item) => item.id === modelId);
-          if (!model) {
-            return NextResponse.json(
-              { error: `model not found: ${provider}/${modelId}` },
-              { status: 404 }
-            );
-          }
-          if (!isLocalCodingAssistantAgent(rec)) {
-            const replacement = await createAgent({
-              provider,
-              modelId,
-              cwd: rec.cwd,
-              thinkingLevel: rec.session.thinkingLevel,
-            });
-            disposeAgent(id);
-            return NextResponse.json({
-              ok: true,
-              replacementAgent: replacement,
-              model: {
-                provider: LOCAL_CODING_ASSISTANT_PROVIDER_ID,
-                id: model.id,
-                name: model.name,
-              },
-            });
-          }
-          const nextModel = {
-            provider: LOCAL_CODING_ASSISTANT_PROVIDER_ID,
-            id: model.id,
-            name: model.name,
-            api: "local-cli",
-            baseUrl: "local-cli",
-            reasoning: true,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 200000,
-            maxTokens: 64000,
-          };
-          await rec.session.setModel(nextModel as never);
-          return NextResponse.json({
-            ok: true,
-            model: {
-              provider: nextModel.provider,
-              id: nextModel.id,
-              name: nextModel.name,
-            },
-          });
-        }
-        if (isLocalCodingAssistantAgent(rec)) {
-          const mr = getModelRegistry();
-          const model = mr.find(provider, modelId);
-          if (!model) {
-            return NextResponse.json(
-              { error: `model not found: ${provider}/${modelId}` },
-              { status: 404 }
-            );
-          }
-          const replacement = await createAgent({
-            provider,
-            modelId,
-            cwd: rec.cwd,
-            thinkingLevel: rec.session.thinkingLevel,
-          });
-          disposeAgent(id);
-          return NextResponse.json({
-            ok: true,
-            replacementAgent: replacement,
-            model: { provider: model.provider, id: model.id, name: model.name },
-          });
-        }
-        const mr = getModelRegistry();
-        const model = mr.find(provider, modelId);
-        if (!model) {
-          return NextResponse.json(
-            { error: `model not found: ${provider}/${modelId}` },
-            { status: 404 }
-          );
-        }
-        await rec.session.setModel(model);
-        return NextResponse.json({
-          ok: true,
-          model: { provider: model.provider, id: model.id, name: model.name },
-        });
-      }
-
-      case "set_thinking_level":
-      case "setThinkingLevel": {
-        const level = body.level as ThinkingLevel;
-        if (!level) {
-          return NextResponse.json(
-            { error: "level required" },
-            { status: 400 }
-          );
-        }
-        rec.session.setThinkingLevel(level);
-        return NextResponse.json({
-          ok: true,
-          thinkingLevel: rec.session.thinkingLevel,
-        });
-      }
-
-      case "set_tools": {
-        // tools: string[] — 要启用的工具名集合（其余会被禁用）
-        const raw = body.tools as unknown;
-        if (!Array.isArray(raw)) {
-          return NextResponse.json(
-            { error: "tools (string[]) required" },
-            { status: 400 }
-          );
-        }
-        const names = raw.filter((x): x is string => typeof x === "string");
-        rec.session.setActiveToolsByName(names);
-        return NextResponse.json({
-          ok: true,
-          active: rec.session.getActiveToolNames(),
-        });
-      }
-
-      case "navigate_tree":
-      case "navigateTree": {
-        const targetId = body.targetId as string;
-        if (!targetId) {
-          return NextResponse.json(
-            { error: "targetId required" },
-            { status: 400 }
-          );
-        }
-        const result = await rec.session.navigateTree(targetId, {
-          summarize: body.summarize as boolean | undefined,
-          customInstructions: body.customInstructions as string | undefined,
-          replaceInstructions: body.replaceInstructions as boolean | undefined,
-          label: body.label as string | undefined,
-        });
-        return NextResponse.json({ ok: true, result });
-      }
-
-      default:
-        return NextResponse.json(
-          { error: `unknown action: ${type}` },
-          { status: 400 }
-        );
+    if (isPromptPostAction(type)) {
+      return actionResultResponse(
+        await handlePromptPostAction({ type, agentId: id, rec, body })
+      );
     }
+    if (isGoalPostAction(type)) {
+      return actionResultResponse(
+        await handleGoalPostAction({ type, agentId: id, rec, body })
+      );
+    }
+    if (isProgressEvidencePostAction(type)) {
+      return actionResultResponse(
+        await handleProgressEvidencePostAction({
+          type,
+          agentId: id,
+          rec,
+          body,
+        })
+      );
+    }
+    if (isModelToolPostAction(type)) {
+      return actionResultResponse(
+        await handleModelToolPostAction({ type, agentId: id, rec, body })
+      );
+    }
+
+    if (isTeamPostAction(type)) {
+      return actionResultResponse(
+        await handleTeamPostAction({ type, agentId: id, rec, body })
+      );
+    }
+
+    if (isLifecyclePostAction(type)) {
+      return actionResultResponse(
+        await handleLifecyclePostAction({ type, agentId: id, rec, body })
+      );
+    }
+
+    return NextResponse.json(
+      { error: `unknown action: ${type}` },
+      { status: 400 }
+    );
   } catch (e) {
     return NextResponse.json(
       { error: (e as Error).message, stack: (e as Error).stack },
@@ -1163,9 +212,11 @@ export async function POST(
 
 /** DELETE: dispose agent */
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertRemoteAuth(req);
+  if (auth) return auth;
   const { id } = await params;
   disposeAgent(id);
   return NextResponse.json({ ok: true });

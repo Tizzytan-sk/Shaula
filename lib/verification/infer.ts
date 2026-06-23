@@ -217,6 +217,9 @@ export function inferVerificationPlan(
       kind: "browser_observation",
       label: "Browser observation",
       targetUrl: input.targetUrl,
+      selector: input.targetSelector,
+      text: input.targetText,
+      timeoutMs: 30_000,
       required: requiredBy("browser") || profileId === "coding.frontend-ui",
       evidenceRequired: ["browser_observation"],
       rationale:

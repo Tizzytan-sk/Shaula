@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertApiAccess } from "@/lib/api-boundary";
 import {
   abortSubagentsForParent,
   createAgent,
@@ -16,9 +17,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const { id } = await params;
   const rec = getAgent(id);
   if (!rec) return NextResponse.json({ error: "agent not found" }, { status: 404 });
@@ -29,6 +32,8 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertApiAccess(req);
+  if (auth) return auth;
   const { id } = await params;
   const rec = getAgent(id);
   if (!rec) return NextResponse.json({ error: "agent not found" }, { status: 404 });

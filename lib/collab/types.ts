@@ -11,6 +11,15 @@
 /** 用户对一次审批请求的决策。 */
 export type ApprovalDecision = "allow" | "deny";
 
+export type ApprovalRiskCategory =
+  | "destructive_filesystem"
+  | "destructive_git"
+  | "network_execute"
+  | "public_external_action"
+  | "secret_exposure"
+  | "sensitive_file_write"
+  | "other";
+
 /**
  * 自定义 SSE 事件——通过 agent ring buffer 推到前端。
  * 不在 SDK 的 AgentSessionEvent union 里，前端 useAgentEvents 单独识别 type。
@@ -54,6 +63,12 @@ export interface ApprovalRequest {
   reason: "rule" | "manual";
   /** 触发规则的 id（reason === "rule" 时必填）。 */
   ruleId?: string;
+  /** 触发规则的人话名称。 */
+  ruleName?: string;
+  /** 风险分类，给 UI 和审计使用。 */
+  riskCategory?: ApprovalRiskCategory;
+  /** 是否允许用户选择“本会话不再问”。高危规则应显式为 false。 */
+  allowRemember?: boolean;
   /**
    * 默认决策：超时 / 关掉窗口时按此结算。
    * 默认 deny，确保"不点 = 不放行"的安全语义。
@@ -88,7 +103,15 @@ export interface ToolCallMatcher {
    * 同一字段下 contains 与 regex 也是 AND；多字段之间 AND。
    * 不存在的字段或非 string 值 → 该字段不匹配 → 整条规则不命中。
    */
-  inputMatch?: Record<string, { contains?: string[]; regex?: string }>;
+  inputMatch?: Record<
+    string,
+    {
+      contains?: string[];
+      regex?: string;
+      flags?: string;
+      caseInsensitive?: boolean;
+    }
+  >;
 }
 
 /** 一条审批规则。 */
@@ -97,6 +120,8 @@ export interface ApprovalRule {
   id: string;
   /** 人话名字（UI 展示用）。 */
   name: string;
+  /** 风险分类（UI / 审计 / fail-closed fallback 使用）。 */
+  riskCategory?: ApprovalRiskCategory;
   /** 命中条件。 */
   match: ToolCallMatcher;
   /**
@@ -106,6 +131,8 @@ export interface ApprovalRule {
    * - "auto-deny": 直接 block，不打扰用户
    */
   on: "ask" | "auto-allow" | "auto-deny";
+  /** 是否允许本会话记住 allow。undefined 视为 true。 */
+  allowRemember?: boolean;
   /** auto-deny 或用户 deny 未提供 denyReason 时的兜底原因。 */
   denyReason?: string;
 }

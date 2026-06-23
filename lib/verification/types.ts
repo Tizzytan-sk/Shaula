@@ -33,6 +33,10 @@ export interface VerificationBrowserCheck {
   kind: "browser_observation";
   label: string;
   targetUrl?: string;
+  selector?: string;
+  text?: string;
+  expectation?: string;
+  timeoutMs?: number;
   required: boolean;
   evidenceRequired: string[];
   rationale: string;
@@ -69,6 +73,8 @@ export interface VerificationPlanInferenceInput {
   hasTypeScriptConfig?: boolean;
   cwd: string;
   targetUrl?: string;
+  targetSelector?: string;
+  targetText?: string;
   createdAt?: number;
   id?: string;
 }
@@ -93,3 +99,33 @@ export interface VerificationCommandResult {
   completedAt: number;
   timedOut?: boolean;
 }
+
+export interface VerificationBrowserResult {
+  planId?: string;
+  checkId: string;
+  kind: "browser_observation";
+  label: string;
+  browserId?: string;
+  targetUrl?: string;
+  selector?: string;
+  text?: string;
+  expectation?: string;
+  required: boolean;
+  evidenceRequired: string[];
+  rationale?: string;
+  status: Exclude<VerificationCheckStatus, "pending" | "running" | "skipped">;
+  passed: boolean;
+  url?: string | null;
+  title?: string | null;
+  screenshotDataUrl?: string | null;
+  textPreview?: string;
+  error?: string;
+  durationMs: number;
+  startedAt: number;
+  completedAt: number;
+  timedOut?: boolean;
+}
+
+export type VerificationResult =
+  | VerificationCommandResult
+  | VerificationBrowserResult;

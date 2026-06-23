@@ -60,6 +60,11 @@ const defaultAuthResponse = {
   oauthProviders: [],
 };
 
+function shortFixtureText(value: string, max = 120): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length > max ? `${compact.slice(0, max - 1)}...` : compact;
+}
+
 /**
  * 给 ChatApp 启动需要的最小接口集合返 fixture。
  * 调用方再额外 page.route 覆盖 /api/agent/new 和 /api/agent/:id/events 走自己的 stub。
@@ -406,6 +411,7 @@ export async function installApiFixtures(
       const action = body.type ?? body.action;
       if (action === "prompt" || action === "goal_set") {
         const objective = body.objective ?? body.text ?? "E2E task";
+        const progressObjective = shortFixtureText(objective, 140);
         const contract = {
           id: "contract-e2e",
           objective,
@@ -434,7 +440,7 @@ export async function installApiFixtures(
           steps: [
             {
               id: "task-contract",
-              title: `确认任务契约：${objective}`,
+              title: `确认任务契约：${progressObjective}`,
               status: "completed",
               summary: "coding.default · evidence: diff, test_result",
               completedAt: now,
@@ -454,7 +460,7 @@ export async function installApiFixtures(
               steps: [
                 {
                   id: "task-contract",
-                  title: `确认任务契约：${objective}`,
+                  title: `确认任务契约：${progressObjective}`,
                   status: "completed",
                   summary: "coding.default · evidence: diff, test_result",
                   completedAt: now,

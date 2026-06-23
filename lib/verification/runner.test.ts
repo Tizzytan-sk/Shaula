@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { isAllowedVerificationCommand, runVerificationCommand } from "./runner";
+import {
+  isAllowedVerificationCommand,
+  runVerificationBrowserCheck,
+  runVerificationCommand,
+  runVerificationPlan,
+} from "./runner";
 
 describe("verification runner command policy", () => {
   it("allows known local verification commands", () => {
@@ -93,5 +98,93 @@ describe("verification runner command policy", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("fails browser checks when no browser observer is available", async () => {
+    const result = await runVerificationBrowserCheck({
+      id: "browser-observation",
+      type: "browser_observation",
+      kind: "browser_observation",
+      label: "Browser observation",
+      targetUrl: "http://127.0.0.1:3000",
+      required: true,
+      evidenceRequired: ["browser_observation"],
+      rationale: "Frontend work needs host browser evidence.",
+    });
+
+    expect(result).toMatchObject({
+      checkId: "browser-observation",
+      kind: "browser_observation",
+      status: "failed",
+      passed: false,
+      required: true,
+    });
+    expect(result.error).toMatch(/browser observer unavailable/i);
+  });
+
+  it("runs browser checks through the injected observer", async () => {
+    const plan = {
+      id: "plan-browser",
+      objective: "Verify UI",
+      createdAt: 1,
+      checks: [
+        {
+          id: "browser-observation",
+          type: "browser_observation" as const,
+          kind: "browser_observation" as const,
+          label: "Browser observation",
+          targetUrl: "http://127.0.0.1:3000",
+          selector: "[data-testid='ready']",
+          required: true,
+          evidenceRequired: ["browser_observation"],
+          rationale: "Frontend work needs host browser evidence.",
+        },
+      ],
+    };
+
+    const results = await runVerificationPlan(plan, {
+      browserObserver: async (check) => ({
+        browserId: "agent:agent-1",
+        passed: check.selector === "[data-testid='ready']",
+        url: check.targetUrl,
+        title: "Ready",
+        screenshotDataUrl: "data:image/png;base64,abc",
+        textPreview: "Selector is visible.",
+      }),
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      kind: "browser_observation",
+      status: "passed",
+      passed: true,
+      browserId: "agent:agent-1",
+      screenshotDataUrl: "data:image/png;base64,abc",
+    });
+  });
+
+  it("times out slow browser observers", async () => {
+    const result = await runVerificationBrowserCheck(
+      {
+        id: "browser-observation",
+        type: "browser_observation",
+        kind: "browser_observation",
+        label: "Browser observation",
+        required: true,
+        evidenceRequired: ["browser_observation"],
+        rationale: "Frontend work needs host browser evidence.",
+        timeoutMs: 5,
+      },
+      {
+        browserObserver: async () => new Promise<never>(() => {}),
+      }
+    );
+
+    expect(result).toMatchObject({
+      status: "timed_out",
+      passed: false,
+      timedOut: true,
+    });
+    expect(result.error).toContain("timed out");
   });
 });
